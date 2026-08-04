@@ -1,0 +1,3 @@
+# The deterministic release asset contains exactly these pack-relative paths.
+template-pack.json
+templates

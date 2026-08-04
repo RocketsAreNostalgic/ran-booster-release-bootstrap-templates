@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+	printf 'verify-release: %s\n' "$*" >&2
+	exit 1
+}
+
+project_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+slug='{{RAN_PACKAGE_SLUG}}'
+package_kind='{{RAN_PACKAGE_TYPE}}'
+header_file='{{RAN_HEADER_PATH}}'
+update_uri='{{RAN_UPDATE_URI}}'
+allowlist="$project_root/release-contents.txt"
+archive=${1:-}
+expected_version=${2:-}
+
+[[ -f "$archive" && ! -L "$archive" ]] || fail 'release ZIP is missing or symbolic.'
+[[ "$package_kind" == plugin || "$package_kind" == theme ]] || fail 'package kind is invalid.'
+[[ "$expected_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
+	|| fail 'expected version is invalid.'
+unzip -tqq "$archive" >/dev/null || fail 'release ZIP is corrupt.'
+
+actual=$(mktemp)
+expected=$(mktemp)
+temporary=$(mktemp -d)
+trap 'rm -f "$actual" "$expected"; rm -rf "$temporary"' EXIT HUP INT TERM
+
+unzip -Z1 "$archive" | sed '/\/$/d' | LC_ALL=C sort -u > "$actual"
+grep -Ev "^${slug}/" "$actual" >/dev/null \
+	&& fail 'release ZIP contains files outside its package root.'
+if zipinfo -l "$archive" | awk '$1 ~ /^l/ { found = 1 } END { exit !found }'; then
+	fail 'release ZIP contains symbolic links.'
+fi
+
+while IFS= read -r entry || [[ -n "$entry" ]]; do
+	[[ -z "$entry" || "$entry" == \#* ]] && continue
+	find "$project_root/$entry" -type f -print | sed "s#^$project_root/#$slug/#"
+done < "$allowlist" | LC_ALL=C sort -u > "$expected"
+diff -u "$expected" "$actual" || fail 'release ZIP differs from the runtime allowlist.'
+
+unzip -q "$archive" -d "$temporary"
+while IFS= read -r file; do
+	relative=${file#"$slug/"}
+	cmp -s "$project_root/$relative" "$temporary/$file" \
+		|| fail "release file differs from reviewed source: $relative"
+done < "$actual"
+
+header="$temporary/$slug/$header_file"
+[[ -f "$header" ]] || fail 'WordPress header file is absent from the release.'
+header_version=$(sed -nE 's/^[[:space:]]*(\*|)[[:space:]]*Version:[[:space:]]*([^[:space:]]+).*/\2/p' "$header")
+[[ "$header_version" == "$expected_version" ]] \
+	|| fail 'archived WordPress header version is incorrect.'
+if [[ "$package_kind" == plugin ]]; then
+	grep -Eq '^[[:space:]]*\*[[:space:]]*Plugin Name:[[:space:]]*[^[:space:]]' "$header" \
+		|| fail 'plugin name header is missing.'
+else
+	grep -Eq '^[[:space:]]*Theme Name:[[:space:]]*[^[:space:]]' "$header" \
+		|| fail 'theme name header is missing.'
+fi
+grep -Fq "Update URI: $update_uri" "$header" \
+	|| fail 'canonical Update URI is missing.'
+
+archive_size=$(wc -c < "$archive" | tr -d '[:space:]')
+archive_sha256=$(shasum -a 256 "$archive" | awk '{ print $1 }')
+[[ "$archive_size" =~ ^[1-9][0-9]*$ && "$archive_sha256" =~ ^[0-9a-f]{64}$ ]] \
+	|| fail 'release ZIP size or digest is invalid.'
+printf 'Verified %s\nSHA-256 %s\n' "$archive" "$archive_sha256"

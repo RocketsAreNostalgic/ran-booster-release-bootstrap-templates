@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/RocketsAreNostalgic/ran-booster-release-bootstrap-templates/blob/main/schema/template-pack.schema.json",
+  "title": "RAN Booster release bootstrap template pack",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "consumer_api",
+    "pack_version",
+    "repository",
+    "release",
+    "profiles"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "consumer_api": { "const": 1 },
+    "pack_version": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)$"
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "id"],
+      "properties": {
+        "name": {
+          "const": "RocketsAreNostalgic/ran-booster-release-bootstrap-templates"
+        },
+        "id": { "type": "string", "pattern": "^[1-9][0-9]*$" }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "tag", "commit"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1 },
+        "tag": {
+          "type": "string",
+          "pattern": "^v(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)$"
+        },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 2,
+      "additionalProperties": { "$ref": "#/$defs/profile" },
+      "propertyNames": {
+        "enum": [
+          "source-ready-wordpress-plugin/1",
+          "source-ready-wordpress-theme/1"
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile_version", "entries"],
+      "properties": {
+        "profile_version": { "const": 1 },
+        "entries": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "release-workflow",
+            "release-please-config",
+            "build-release-script",
+            "verify-release-script",
+            "upload-release-assets-script"
+          ],
+          "properties": {
+            "release-workflow": { "$ref": "#/$defs/entry" },
+            "release-please-config": { "$ref": "#/$defs/entry" },
+            "build-release-script": { "$ref": "#/$defs/entry" },
+            "verify-release-script": { "$ref": "#/$defs/entry" },
+            "upload-release-assets-script": { "$ref": "#/$defs/entry" }
+          }
+        }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "size", "sha256", "placeholders"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^templates/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$",
+          "maxLength": 255
+        },
+        "size": { "type": "integer", "minimum": 1, "maximum": 262144 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "placeholders": {
+          "type": "object",
+          "additionalProperties": {
+            "enum": [
+              "branch",
+              "github_uri",
+              "json_fragment",
+              "package_type",
+              "path",
+              "sha",
+              "slug"
+            ]
+          },
+          "propertyNames": { "pattern": "^[A-Z][A-Z0-9_]*$" }
+        }
+      }
+    }
+  }
+}

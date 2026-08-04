@@ -1,0 +1,9 @@
+{
+  "BASE_SHA": "0123456789abcdef0123456789abcdef01234567",
+  "DEFAULT_BRANCH": "main",
+  "EXTRA_FILES_JSON": "[{\"type\":\"generic\",\"path\":\"example-package.php\"}]",
+  "HEADER_PATH": "example-package.php",
+  "PACKAGE_SLUG": "example-package",
+  "PACKAGE_TYPE": "plugin",
+  "UPDATE_URI": "https://github.com/example/example-package"
+}

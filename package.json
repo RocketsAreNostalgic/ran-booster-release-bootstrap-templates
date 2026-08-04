@@ -1,0 +1,15 @@
+{
+  "name": "ran-booster-release-bootstrap-templates",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Immutable template packs for RAN Booster release bootstrap",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "bash scripts/build-pack.sh",
+    "verify": "bash scripts/verify-pack.sh",
+    "test": "node tests/run.mjs"
+  }
+}
