@@ -41,12 +41,46 @@ try {
     ]),
   );
   validateSource(source, profiles);
+  await assertRepositoryWorkflows();
   await renderFixtures(profiles);
   await assertDeterministicPack();
   await assertTamperFails();
   process.stdout.write("All Consumer API 1 template-pack tests passed.\n");
 } finally {
   await rm(temporary, { recursive: true, force: true });
+}
+
+async function assertRepositoryWorkflows() {
+  const quality = await readFile(
+    path.join(root, ".github/workflows/quality.yml"),
+    "utf8",
+  );
+  const release = await readFile(
+    path.join(root, ".github/workflows/release-please.yml"),
+    "utf8",
+  );
+
+  for (const workflow of [quality, release]) {
+    const actions = [...workflow.matchAll(/^\s+(?:- )?uses: (\S+)/gm)].map(
+      (match) => match[1],
+    );
+    assert.ok(actions.length > 0);
+    for (const action of actions)
+      assert.match(action, /^[^@]+@[0-9a-f]{40}$/, action);
+  }
+
+  assert.match(quality, /actions\/upload-artifact@[0-9a-f]{40}/);
+  assert.match(quality, /git archive --format=tar/);
+  assert.match(release, /^\s+workflow_run:/m);
+  assert.match(release, /workflow_run\.conclusion == 'success'/);
+  assert.match(release, /workflow_run\.head_repository\.full_name/);
+  assert.match(release, /workflow_run\.head_sha/);
+  assert.match(release, /actions\/download-artifact@[0-9a-f]{40}/);
+  assert.match(release, /run-id: \$\{\{ github\.event\.workflow_run\.id \}\}/);
+  assert.match(release, /\.merge_commit_sha == \$quality/);
+  assert.match(release, /test "\$pending" = true/);
+  assert.equal((release.match(/bash "\$source\/scripts\/build-pack\.sh"/g) ?? []).length, 1);
+  assert.doesNotMatch(release, /^\s+publish-pack:/m);
 }
 
 async function renderFixtures(profiles) {
