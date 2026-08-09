@@ -14,10 +14,11 @@ import {
 const temporary = await mkdtemp(
   path.join(os.tmpdir(), "ran-booster-template-tests-"),
 );
+const { version } = await loadJson(path.join(root, "package.json"));
 const identity = {
   repositoryId: "987654321",
   releaseId: "41",
-  tag: "v0.1.0",
+  tag: `v${version}`,
   commit: "0123456789abcdef0123456789abcdef01234567",
 };
 
