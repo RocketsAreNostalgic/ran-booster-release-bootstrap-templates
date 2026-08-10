@@ -14,7 +14,41 @@ branch=${RAN_RELEASE_BRANCH:-}
 	|| fail 'RAN_RELEASE_BRANCH is invalid.'
 
 release_json() {
-	gh api "repos/${repository}/releases/tags/$1"
+	local tag=$1 response inventory count
+	if response=$(gh api "repos/${repository}/releases/tags/${tag}" 2>&1); then
+		printf '%s\n' "$response"
+		return 0
+	fi
+	[[ "$response" == *'HTTP 404'* ]] || {
+		printf '%s\n' "$response" >&2
+		fail 'release tag lookup failed.'
+	}
+	if ! inventory=$(gh api --paginate --slurp \
+		"repos/${repository}/releases?per_page=100" 2>&1); then
+		printf '%s\n' "$inventory" >&2
+		fail 'release inventory lookup failed.'
+	fi
+	count=$(jq -er --arg tag "$tag" \
+		'[.[][] | select(.tag_name == $tag)] | length' <<< "$inventory")
+	case $count in
+		0)
+			printf 'release lookup: HTTP 404\n' >&2
+			return 1
+			;;
+		1)
+			response=$(jq -cer --arg tag "$tag" \
+				'[.[][] | select(.tag_name == $tag)][0]' <<< "$inventory")
+			[[ $(jq -er '.draft' <<< "$response") == true ]] \
+				|| fail 'published release is missing from the tag lookup.'
+			printf '%s\n' "$response"
+			;;
+		*) fail 'release inventory contains duplicate tag identities.' ;;
+	esac
+}
+
+release_id_json() {
+	[[ "$1" =~ ^[1-9][0-9]*$ ]] || fail 'release ID is invalid.'
+	gh api "repos/${repository}/releases/$1"
 }
 
 tag_json() {
@@ -98,7 +132,11 @@ verify_asset() {
 
 	size=$(wc -c < "$archive" | tr -d '[:space:]')
 	digest="sha256:$(shasum -a 256 "$archive" | awk '{ print $1 }')"
-	response=$(release_json "$tag")
+	if [[ "$mode" == pending ]]; then
+		response=$(release_id_json "$release_id")
+	else
+		response=$(release_json "$tag")
+	fi
 	asset_count=$(jq -er '.assets | length' <<< "$response")
 	if [[ "$asset_count" -eq 0 ]]; then
 		[[ "$mode" == pending ]] || fail 'published release asset is missing.'
@@ -108,7 +146,11 @@ verify_asset() {
 	read -r -a readback_delays <<< "${RAN_RELEASE_READBACK_DELAYS:-0 2 2 2 2}"
 	for delay in "${readback_delays[@]}"; do
 		sleep "$delay"
-		response=$(release_json "$tag")
+		if [[ "$mode" == pending ]]; then
+			response=$(release_id_json "$release_id")
+		else
+			response=$(release_json "$tag")
+		fi
 		if jq -e \
 			--arg digest "$digest" \
 			--arg name "$name" \

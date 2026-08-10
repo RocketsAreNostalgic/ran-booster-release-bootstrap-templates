@@ -7,6 +7,7 @@ const stateFile = process.env.RAN_FAKE_GH_STATE;
 if (!stateFile) fail("RAN_FAKE_GH_STATE is required.");
 const state = JSON.parse(readFileSync(stateFile, "utf8"));
 const arguments_ = process.argv.slice(2);
+const releases = state.releases ?? (state.release ? [state.release] : []);
 
 if (arguments_[0] === "api") {
   const endpoint = arguments_
@@ -20,12 +21,28 @@ if (arguments_[0] === "api") {
     if (!state.tag) notFound();
     response = { object: { sha: state.tag.sha, type: "commit" } };
   } else if (endpoint?.includes("/releases/tags/")) {
-    if (!state.release) notFound();
-    response = state.release;
+    if (state.release_tag_error) fail("HTTP 500: release lookup failed");
+    if (state.release_tag_404) notFound();
+    const requestedTag = endpoint.split("/releases/tags/")[1];
+    const matches = releases.filter(
+      (release) => !release.draft && release.tag_name === requestedTag,
+    );
+    if (matches.length !== 1) notFound();
+    response = matches[0];
+  } else if (endpoint?.includes("/releases?")) {
+    response = state.release_pages ?? releases;
+  } else if (/\/releases\/[1-9][0-9]*$/.test(endpoint ?? "")) {
+    const releaseId = Number(endpoint.split("/releases/")[1]);
+    response = releases.find((release) => release.id === releaseId);
+    if (!response) notFound();
   } else {
     fail(`Unsupported API endpoint: ${endpoint}`);
   }
-  if (jqIndex >= 0 && arguments_[jqIndex + 1] === ".object.sha") {
+  if (arguments_.includes("--slurp")) {
+    process.stdout.write(
+      `${JSON.stringify(state.release_pages ? response : [response])}\n`,
+    );
+  } else if (jqIndex >= 0 && arguments_[jqIndex + 1] === ".object.sha") {
     process.stdout.write(`${response.object.sha}\n`);
   } else {
     process.stdout.write(`${JSON.stringify(response)}\n`);

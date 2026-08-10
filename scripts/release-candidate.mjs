@@ -12,54 +12,7 @@ assert(
 assert(validBranch(defaultBranch), "Default branch is invalid.");
 assert(validBranch(expectedHead), "Release Please branch is invalid.");
 assert(pullRequestsFile, "Pull request evidence is required.");
-const controlCommit = process.env.RAN_RELEASE_CONTROL_COMMIT ?? "";
-if (controlCommit) {
-  assert(
-    process.env.RAN_RELEASE_RECOVERY === "31402080912:2",
-    "Release recovery tuple is invalid.",
-  );
-  assert(
-    candidate === "b288b28cfd9c77f4b998c32427f77af045b0e68b",
-    "Release recovery candidate is invalid.",
-  );
-  assert(
-    /^[0-9a-f]{40}$/.test(controlCommit),
-    "Release control commit is invalid.",
-  );
-  assert(
-    git("rev-parse", "HEAD") === controlCommit,
-    "HEAD is not the release control commit.",
-  );
-  assert(
-    git("rev-parse", `${controlCommit}^1`) ===
-      "22b1a4341ace68b60be2b91c248deb3dc5073357",
-    "Release control parent is invalid.",
-  );
-  assert(
-    spawnSync("git", ["merge-base", "--is-ancestor", candidate, controlCommit])
-      .status === 0,
-    "Candidate is not an ancestor of the release control commit.",
-  );
-  const controlChanges = git(
-    "diff",
-    "--name-only",
-    candidate,
-    controlCommit,
-  ).split("\n");
-  assert(
-    JSON.stringify(controlChanges) ===
-      JSON.stringify([
-        ".github/workflows/quality.yml",
-        ".github/workflows/release-please.yml",
-        "scripts/release-candidate.mjs",
-        "scripts/upload-pack.sh",
-        "tests/run.mjs",
-      ]),
-    "Release control changes exceed the recovery allowlist.",
-  );
-} else {
-  assert(git("rev-parse", "HEAD") === candidate, "HEAD is not the candidate.");
-}
+assert(git("rev-parse", "HEAD") === candidate, "HEAD is not the candidate.");
 
 const ancestry = git("rev-list", "--parents", "-n", "1", candidate).split(" ");
 assert(

@@ -8,37 +8,45 @@ fail() {
 
 repository=${GITHUB_REPOSITORY:-}
 branch=main
-control_commit=${RAN_RELEASE_CONTROL_COMMIT:-}
-recovery_tuple=${RAN_RELEASE_RECOVERY:-}
 [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
 	|| fail 'GITHUB_REPOSITORY is invalid.'
-[[ -z "$control_commit" || "$control_commit" =~ ^[0-9a-f]{40}$ ]] \
-	|| fail 'release control commit is invalid.'
-
-validate_recovery() {
-	local candidate=$1
-	[[ "$recovery_tuple" == 31402080912:2 ]] \
-		|| fail 'release recovery tuple is invalid.'
-	[[ "$candidate" == b288b28cfd9c77f4b998c32427f77af045b0e68b ]] \
-		|| fail 'release recovery candidate is invalid.'
-	[[ $(git rev-parse HEAD) == "$control_commit" ]] \
-		|| fail 'HEAD is not the release control commit.'
-	[[ $(git rev-parse "${control_commit}^1") == 22b1a4341ace68b60be2b91c248deb3dc5073357 ]] \
-		|| fail 'release control parent is invalid.'
-	git merge-base --is-ancestor "$candidate" "$control_commit" \
-		|| fail 'release candidate is not an ancestor of the control commit.'
-	mapfile -t control_changes < <(git diff --name-only "$candidate" "$control_commit")
-	[[ ${#control_changes[@]} -eq 5 \
-		&& ${control_changes[0]} == .github/workflows/quality.yml \
-		&& ${control_changes[1]} == .github/workflows/release-please.yml \
-		&& ${control_changes[2]} == scripts/release-candidate.mjs \
-		&& ${control_changes[3]} == scripts/upload-pack.sh \
-		&& ${control_changes[4]} == tests/run.mjs ]] \
-		|| fail 'release control changes exceed the recovery allowlist.'
-}
 
 release_json() {
-	gh api "repos/${repository}/releases/tags/$1"
+	local tag=$1 response inventory count
+	if response=$(gh api "repos/${repository}/releases/tags/${tag}" 2>&1); then
+		printf '%s\n' "$response"
+		return 0
+	fi
+	[[ "$response" == *'HTTP 404'* ]] || {
+		printf '%s\n' "$response" >&2
+		fail 'release tag lookup failed.'
+	}
+	if ! inventory=$(gh api --paginate --slurp \
+		"repos/${repository}/releases?per_page=100" 2>&1); then
+		printf '%s\n' "$inventory" >&2
+		fail 'release inventory lookup failed.'
+	fi
+	count=$(jq -er --arg tag "$tag" \
+		'[.[][] | select(.tag_name == $tag)] | length' <<< "$inventory")
+	case $count in
+		0)
+			printf 'release lookup: HTTP 404\n' >&2
+			return 1
+			;;
+		1)
+			response=$(jq -cer --arg tag "$tag" \
+				'[.[][] | select(.tag_name == $tag)][0]' <<< "$inventory")
+			[[ $(jq -er '.draft' <<< "$response") == true ]] \
+				|| fail 'published release is missing from the tag lookup.'
+			printf '%s\n' "$response"
+			;;
+		*) fail 'release inventory contains duplicate tag identities.' ;;
+	esac
+}
+
+release_id_json() {
+	[[ "$1" =~ ^[1-9][0-9]*$ ]] || fail 'release ID is invalid.'
+	gh api "repos/${repository}/releases/$1"
 }
 
 tag_json() {
@@ -50,7 +58,6 @@ inspect_release() {
 	[[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'release tag is invalid.'
 	[[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || fail 'release candidate is invalid.'
 	[[ "$prerelease" == false ]] || fail 'template-pack releases must be stable.'
-	[[ -z "$control_commit" ]] || validate_recovery "$candidate"
 
 	if response=$(release_json "$tag" 2>&1); then
 		jq -e \
@@ -88,8 +95,7 @@ inspect_release() {
 			'.object.type == "commit" and .object.sha == $candidate' \
 			<<< "$response" >/dev/null || fail 'published tag target is invalid.'
 	else
-		local expected_main=${control_commit:-$candidate}
-		[[ $(gh api "repos/${repository}/git/ref/heads/${branch}" --jq '.object.sha') == "$expected_main" ]] \
+		[[ $(gh api "repos/${repository}/git/ref/heads/${branch}" --jq '.object.sha') == "$candidate" ]] \
 			|| fail 'default branch moved away from the candidate.'
 		if response=$(tag_json "$tag" 2>&1); then
 			fail 'tag exists before verified publication.'
@@ -124,7 +130,11 @@ verify_asset() {
 
 	size=$(wc -c < "$archive" | tr -d '[:space:]')
 	digest="sha256:$(shasum -a 256 "$archive" | awk '{ print $1 }')"
-	response=$(release_json "$tag")
+	if [[ "$mode" == pending ]]; then
+		response=$(release_id_json "$release_id")
+	else
+		response=$(release_json "$tag")
+	fi
 	asset_count=$(jq -er '.assets | length' <<< "$response")
 	if [[ "$asset_count" -eq 0 ]]; then
 		[[ "$mode" == pending ]] || fail 'published release asset is missing.'
@@ -134,7 +144,11 @@ verify_asset() {
 	read -r -a readback_delays <<< "${RAN_RELEASE_READBACK_DELAYS:-0 2 2 2 2}"
 	for delay in "${readback_delays[@]}"; do
 		sleep "$delay"
-		response=$(release_json "$tag")
+		if [[ "$mode" == pending ]]; then
+			response=$(release_id_json "$release_id")
+		else
+			response=$(release_json "$tag")
+		fi
 		if jq -e \
 			--arg digest "$digest" \
 			--arg name "$name" \
