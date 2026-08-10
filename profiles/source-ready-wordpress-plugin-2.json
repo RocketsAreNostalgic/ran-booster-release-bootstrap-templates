@@ -1,5 +1,5 @@
 {
-  "id": "source-ready-wordpress-theme/1",
+  "id": "source-ready-wordpress-plugin/2",
   "profile_version": 1,
   "entries": {
     "release-workflow": {
@@ -10,7 +10,7 @@
       }
     },
     "release-please-config": {
-      "path": "templates/profiles/wordpress-theme/release-please-config.json.tmpl",
+      "path": "templates/profiles/wordpress-plugin/release-please-config.json.tmpl",
       "placeholders": {
         "BASE_SHA": "sha",
         "EXTRA_FILES_JSON": "json_fragment",
