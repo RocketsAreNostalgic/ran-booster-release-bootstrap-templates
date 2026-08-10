@@ -31,6 +31,20 @@ const identity = {
   releaseId: "41",
   tag: `v${version}`,
 };
+const recoveryIdentity = {
+  base: "f46329cefe4465d6dbf40204aed2d468b8a954c0",
+  candidate: "4b4a340d238eada8e73f12745e3f929788cb8942",
+  controlBase: "4b4a340d238eada8e73f12745e3f929788cb8942",
+  releaseHead: "eee2dd42d5030750d0bbde51eb2a054a5a296979",
+  tuple: "31417475890:2",
+};
+const recoveryControlFiles = [
+  ".github/workflows/quality.yml",
+  ".github/workflows/release-please.yml",
+  "scripts/release-candidate.mjs",
+  "scripts/upload-pack.sh",
+  "tests/run.mjs",
+];
 const testCrcTable = Array.from({ length: 256 }, (_, value) => {
   let crc = value;
   for (let bit = 0; bit < 8; bit += 1)
@@ -110,7 +124,11 @@ async function assertRepositoryWorkflows() {
   assert.match(release, /steps\.quality\.outputs\.commit/);
   assert.match(release, /actions\/download-artifact@[0-9a-f]{40}/);
   assert.match(release, /run-id: \$\{\{ steps\.quality\.outputs\.run_id \}\}/);
-  assert.doesNotMatch(release, /RAN_RELEASE_RECOVERY/);
+  assert.match(release, /RAN_QUALITY_RUN_ID" == 31417475890/);
+  assert.match(release, /RAN_QUALITY_RUN_ATTEMPT" = 2/);
+  assert.match(release, /4b4a340d238eada8e73f12745e3f929788cb8942/);
+  assert.match(release, /RAN_RELEASE_RECOVERY/);
+  assert.match(release, /steps\.quality\.outputs\.recovery != 'true'/);
   assert.match(release, /scripts\/release-candidate\.mjs/);
   assert.match(release, /printf 'PACK_COMMIT=%s/);
   assert.match(release, /"\$RAN_QUALITY_COMMIT"/);
@@ -159,6 +177,54 @@ async function assertReleaseCandidateDecisions() {
   ]);
   assert.equal(taggedDecision.pending, false);
   assert.equal(taggedDecision.tagged, true);
+
+  const correctedChangelog = await createReleaseFixture("corrected-changelog", {
+    postManifestPath: "CHANGELOG.md",
+  });
+  assert.equal(
+    runReleaseCandidate(correctedChangelog, [
+      eligiblePullRequest(correctedChangelog),
+    ]).release_head,
+    correctedChangelog.releaseHead,
+  );
+  const unsafePostManifest = await createReleaseFixture(
+    "unsafe-post-manifest",
+    { postManifestPath: "release-notes.txt" },
+  );
+  assert.notEqual(
+    runReleaseCandidate(
+      unsafePostManifest,
+      [eligiblePullRequest(unsafePostManifest)],
+      false,
+    ).status,
+    0,
+    "A post-manifest payload change passed as a changelog correction.",
+  );
+  const lateManifestOwner = await createReleaseFixture("late-manifest-owner", {
+    preManifestCommit: true,
+  });
+  assert.notEqual(
+    runReleaseCandidate(
+      lateManifestOwner,
+      [eligiblePullRequest(lateManifestOwner)],
+      false,
+    ).status,
+    0,
+    "A manifest owner that was not the first child of the PR base passed.",
+  );
+  const manifestOwnerPayload = await createReleaseFixture(
+    "manifest-owner-payload",
+    { ownerExtraPath: "release-notes.txt" },
+  );
+  assert.notEqual(
+    runReleaseCandidate(
+      manifestOwnerPayload,
+      [eligiblePullRequest(manifestOwnerPayload)],
+      false,
+    ).status,
+    0,
+    "A manifest owner with an extra release payload path passed.",
+  );
 
   const rejectedPullRequests = [
     ["missing", []],
@@ -244,11 +310,70 @@ async function assertReleaseCandidateDecisions() {
     0,
     "A merge without a Release Please manifest change passed.",
   );
+
+  const recovery = await createOneShotRecoveryFixture("candidate");
+  const recovered = runReleaseCandidate(
+    recovery,
+    [eligiblePullRequest(recovery)],
+    true,
+    {
+      RAN_RELEASE_CONTROL_COMMIT: recovery.controlCommit,
+      RAN_RELEASE_RECOVERY: recoveryIdentity.tuple,
+    },
+  );
+  assert.equal(recovered.candidate, recovery.candidate);
+  assert.notEqual(
+    runReleaseCandidate(recovery, [eligiblePullRequest(recovery)], false, {
+      RAN_RELEASE_CONTROL_COMMIT: recovery.controlCommit,
+    }).status,
+    0,
+    "Recovery accepted a missing one-shot tuple.",
+  );
+  for (const [label, unsafeRecovery] of [
+    [
+      "extra recovery path",
+      await createOneShotRecoveryFixture("candidate-extra", {
+        extraPath: true,
+      }),
+    ],
+    [
+      "wrong recovery parent",
+      await createOneShotRecoveryFixture("candidate-parent", {
+        secondCommit: true,
+      }),
+    ],
+    [
+      "merge-only recovery payload",
+      await createOneShotRecoveryFixture("candidate-merge-payload", {
+        mergePayload: true,
+      }),
+    ],
+  ]) {
+    assert.notEqual(
+      runReleaseCandidate(
+        unsafeRecovery,
+        [eligiblePullRequest(unsafeRecovery)],
+        false,
+        {
+          RAN_RELEASE_CONTROL_COMMIT: unsafeRecovery.controlCommit,
+          RAN_RELEASE_RECOVERY: recoveryIdentity.tuple,
+        },
+      ).status,
+      0,
+      `${label} passed release-candidate recovery.`,
+    );
+  }
 }
 
 async function createReleaseFixture(
   name,
-  { changeManifest = true, differentTree = false } = {},
+  {
+    changeManifest = true,
+    differentTree = false,
+    ownerExtraPath = "",
+    postManifestPath = "",
+    preManifestCommit = false,
+  } = {},
 ) {
   const directory = path.join(temporary, `release-candidate-${name}`);
   const expectedHead =
@@ -265,9 +390,18 @@ async function createReleaseFixture(
     path.join(directory, ".release-please-manifest.json"),
     `${JSON.stringify({ ".": "0.2.0" })}\n`,
   );
+  await writeFile(path.join(directory, "CHANGELOG.md"), "# Changelog\n");
   git(directory, "add", ".");
   git(directory, "commit", "-m", "chore: fixture base");
   git(directory, "checkout", "-b", expectedHead);
+  if (preManifestCommit) {
+    await writeFile(
+      path.join(directory, "CHANGELOG.md"),
+      "Release preparation.\n\n# Changelog\n",
+    );
+    git(directory, "add", "CHANGELOG.md");
+    git(directory, "commit", "-m", "docs: prepare release notes");
+  }
   if (changeManifest) {
     await writeFile(
       path.join(directory, "package.json"),
@@ -277,11 +411,26 @@ async function createReleaseFixture(
       path.join(directory, ".release-please-manifest.json"),
       `${JSON.stringify({ ".": "0.3.0" })}\n`,
     );
+    await writeFile(
+      path.join(directory, "CHANGELOG.md"),
+      "## 0.3.0\n\nRelease fixture.\n\n# Changelog\n",
+    );
+    if (ownerExtraPath) {
+      await writeFile(path.join(directory, ownerExtraPath), "Unexpected.\n");
+    }
   } else {
     await writeFile(path.join(directory, "release-notes.txt"), "No version.\n");
   }
   git(directory, "add", ".");
   git(directory, "commit", "-m", "chore(main): release fixture");
+  if (postManifestPath) {
+    await writeFile(
+      path.join(directory, postManifestPath),
+      "Audited release correction.\n",
+    );
+    git(directory, "add", postManifestPath);
+    git(directory, "commit", "-m", "docs: correct release notes");
+  }
   const releaseHead = git(directory, "rev-parse", "HEAD");
 
   git(directory, "checkout", "main");
@@ -298,6 +447,54 @@ async function createReleaseFixture(
     directory,
     expectedHead,
     releaseHead,
+  };
+}
+
+async function createOneShotRecoveryFixture(
+  name,
+  { extraPath = false, mergePayload = false, secondCommit = false } = {},
+) {
+  const directory = path.join(temporary, `release-recovery-${name}`);
+  git(temporary, "clone", "--quiet", "--no-hardlinks", root, directory);
+  git(directory, "config", "user.email", "fixture@example.test");
+  git(directory, "config", "user.name", "Fixture");
+  git(
+    directory,
+    "checkout",
+    "-B",
+    "recovery-base",
+    recoveryIdentity.controlBase,
+  );
+  git(directory, "checkout", "-b", "recovery-correction");
+  for (const file of recoveryControlFiles) {
+    const destination = path.join(directory, file);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await cp(path.join(root, file), destination);
+  }
+  if (extraPath)
+    await writeFile(path.join(directory, "payload.txt"), "changed\n");
+  git(directory, "add", ".");
+  git(directory, "commit", "-m", "fix: recover corrected release candidate");
+  git(directory, "checkout", "recovery-base");
+  if (secondCommit)
+    git(directory, "commit", "--allow-empty", "-m", "fix: move recovery base");
+  git(directory, "merge", "--no-ff", "--no-commit", "recovery-correction");
+  if (mergePayload) {
+    await writeFile(
+      path.join(directory, "tests/run.mjs"),
+      "merge-only payload\n",
+    );
+    git(directory, "add", "tests/run.mjs");
+  }
+  git(directory, "commit", "-m", "Merge recovery correction");
+  return {
+    base: recoveryIdentity.base,
+    candidate: recoveryIdentity.candidate,
+    controlCommit: git(directory, "rev-parse", "HEAD"),
+    directory,
+    expectedHead:
+      "release-please--branches--main--components--ran-booster-release-bootstrap-templates",
+    releaseHead: recoveryIdentity.releaseHead,
   };
 }
 
@@ -327,7 +524,12 @@ function eligiblePullRequest(fixture) {
   };
 }
 
-function runReleaseCandidate(fixture, pullRequests, successful = true) {
+function runReleaseCandidate(
+  fixture,
+  pullRequests,
+  successful = true,
+  environment = {},
+) {
   const pullRequestsFile = path.join(fixture.directory, "pull-requests.json");
   writeFileSync(pullRequestsFile, JSON.stringify(pullRequests));
   const arguments_ = [
@@ -342,11 +544,13 @@ function runReleaseCandidate(fixture, pullRequests, successful = true) {
     return spawnSync(process.execPath, arguments_, {
       cwd: fixture.directory,
       encoding: "utf8",
+      env: { ...process.env, ...environment },
     });
   return JSON.parse(
     execFileSync(process.execPath, arguments_, {
       cwd: fixture.directory,
       encoding: "utf8",
+      env: { ...process.env, ...environment },
       stdio: ["ignore", "pipe", "pipe"],
     }),
   );
@@ -370,6 +574,96 @@ async function assertPublisherReleaseOutcomes() {
     `#!/bin/sh\nexec "${process.execPath}" "${path.join(root, "tests/fake-gh.mjs")}" "$@"\n`,
   );
   await chmod(fakeGh, 0o755);
+
+  const recovery = await createOneShotRecoveryFixture("publisher");
+  const recoveryPublisher = {
+    archive: "ran-booster-release-bootstrap-templates.zip",
+    branchEnvironment: {
+      RAN_RELEASE_CONTROL_COMMIT: recovery.controlCommit,
+      RAN_RELEASE_RECOVERY: recoveryIdentity.tuple,
+    },
+    prerelease: false,
+    script: path.join(root, "scripts/upload-pack.sh"),
+    tag: "v0.2.1",
+  };
+  const recoveryInspect = [
+    "inspect",
+    recoveryPublisher.tag,
+    recoveryIdentity.candidate,
+    "false",
+  ];
+  const recoveryState = {
+    branch_sha: recovery.controlCommit,
+    calls: [],
+    release: null,
+    remote_asset: path.join(recovery.directory, "remote.zip"),
+    tag: null,
+  };
+  const recovered = runPublisher(
+    recoveryPublisher,
+    recoveryInspect,
+    recoveryState,
+    bin,
+    recovery.directory,
+  );
+  assert.equal(JSON.parse(recovered.stdout).state, "absent");
+  assertPublisherFails(
+    recoveryPublisher,
+    ["inspect", recoveryPublisher.tag, "a".repeat(40), "false"],
+    recoveryState,
+    bin,
+    recovery.directory,
+    "wrong recovery candidate",
+  );
+  assertPublisherFails(
+    {
+      ...recoveryPublisher,
+      branchEnvironment: {
+        ...recoveryPublisher.branchEnvironment,
+        RAN_RELEASE_RECOVERY: "31417475890:3",
+      },
+    },
+    recoveryInspect,
+    recoveryState,
+    bin,
+    recovery.directory,
+    "wrong recovery tuple",
+  );
+  for (const [label, unsafeRecovery] of [
+    [
+      "extra recovery path",
+      await createOneShotRecoveryFixture("publisher-extra", {
+        extraPath: true,
+      }),
+    ],
+    [
+      "wrong recovery parent",
+      await createOneShotRecoveryFixture("publisher-parent", {
+        secondCommit: true,
+      }),
+    ],
+    [
+      "merge-only recovery payload",
+      await createOneShotRecoveryFixture("publisher-merge-payload", {
+        mergePayload: true,
+      }),
+    ],
+  ]) {
+    assertPublisherFails(
+      {
+        ...recoveryPublisher,
+        branchEnvironment: {
+          ...recoveryPublisher.branchEnvironment,
+          RAN_RELEASE_CONTROL_COMMIT: unsafeRecovery.controlCommit,
+        },
+      },
+      recoveryInspect,
+      { ...recoveryState, branch_sha: unsafeRecovery.controlCommit },
+      bin,
+      unsafeRecovery.directory,
+      label,
+    );
+  }
 
   const publishers = [
     {
