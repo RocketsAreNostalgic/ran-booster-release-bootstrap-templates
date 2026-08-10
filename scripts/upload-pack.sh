@@ -8,37 +8,8 @@ fail() {
 
 repository=${GITHUB_REPOSITORY:-}
 branch=main
-control_commit=${RAN_RELEASE_CONTROL_COMMIT:-}
-recovery_tuple=${RAN_RELEASE_RECOVERY:-}
 [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
 	|| fail 'GITHUB_REPOSITORY is invalid.'
-[[ -z "$control_commit" || "$control_commit" =~ ^[0-9a-f]{40}$ ]] \
-	|| fail 'release control commit is invalid.'
-
-validate_recovery() {
-	local candidate=$1 ancestry
-	[[ "$recovery_tuple" == 31417475890:2 ]] \
-		|| fail 'release recovery tuple is invalid.'
-	[[ "$candidate" == 4b4a340d238eada8e73f12745e3f929788cb8942 ]] \
-		|| fail 'release recovery candidate is invalid.'
-	[[ $(git rev-parse HEAD) == "$control_commit" ]] \
-		|| fail 'HEAD is not the release control commit.'
-	read -r -a ancestry <<< "$(git rev-list --parents -n 1 "$control_commit")"
-	[[ ${#ancestry[@]} -eq 3 \
-		&& ${ancestry[0]} == "$control_commit" \
-		&& ${ancestry[1]} == "$candidate" ]] \
-		|| fail 'release control parent is invalid.'
-	[[ $(git rev-parse "${control_commit}^{tree}") == $(git rev-parse "${ancestry[2]}^{tree}") ]] \
-		|| fail 'release control tree differs from its correction head.'
-	mapfile -t control_changes < <(git diff --name-only "$candidate" "$control_commit")
-	[[ ${#control_changes[@]} -eq 5 \
-		&& ${control_changes[0]} == .github/workflows/quality.yml \
-		&& ${control_changes[1]} == .github/workflows/release-please.yml \
-		&& ${control_changes[2]} == scripts/release-candidate.mjs \
-		&& ${control_changes[3]} == scripts/upload-pack.sh \
-		&& ${control_changes[4]} == tests/run.mjs ]] \
-		|| fail 'release control changes exceed the recovery allowlist.'
-}
 
 release_json() {
 	local tag=$1 response inventory count
@@ -87,7 +58,6 @@ inspect_release() {
 	[[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'release tag is invalid.'
 	[[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || fail 'release candidate is invalid.'
 	[[ "$prerelease" == false ]] || fail 'template-pack releases must be stable.'
-	[[ -z "$control_commit" ]] || validate_recovery "$candidate"
 
 	if response=$(release_json "$tag" 2>&1); then
 		jq -e \
@@ -125,8 +95,7 @@ inspect_release() {
 			'.object.type == "commit" and .object.sha == $candidate' \
 			<<< "$response" >/dev/null || fail 'published tag target is invalid.'
 	else
-		local expected_main=${control_commit:-$candidate}
-		[[ $(gh api "repos/${repository}/git/ref/heads/${branch}" --jq '.object.sha') == "$expected_main" ]] \
+		[[ $(gh api "repos/${repository}/git/ref/heads/${branch}" --jq '.object.sha') == "$candidate" ]] \
 			|| fail 'default branch moved away from the candidate.'
 		if response=$(tag_json "$tag" 2>&1); then
 			fail 'tag exists before verified publication.'
@@ -138,6 +107,25 @@ inspect_release() {
 		--argjson release_id "$release_id" \
 		--arg state "$state" \
 		'{release_id: $release_id, state: $state}'
+}
+
+inspect_created_release() {
+	local tag=$1 candidate=$2 prerelease=$3 response state
+	local -a discovery_delays
+	read -r -a discovery_delays <<< "${RAN_RELEASE_DISCOVERY_DELAYS:-0 2 2 2 2}"
+	[[ ${#discovery_delays[@]} -gt 0 ]] || fail 'release discovery delays are empty.'
+	for delay in "${discovery_delays[@]}"; do
+		sleep "$delay"
+		response=$(inspect_release "$tag" "$candidate" "$prerelease") \
+			|| fail 'created release lookup failed.'
+		state=$(jq -er '.state' <<< "$response")
+		if [[ "$state" == draft ]]; then
+			printf '%s\n' "$response"
+			return 0
+		fi
+		[[ "$state" == absent ]] || fail 'created release is not an exact draft.'
+	done
+	fail 'created draft did not become visible within the bounded readback window.'
 }
 
 verify_asset() {
@@ -218,10 +206,14 @@ case ${1:-} in
 		[[ $# -eq 4 ]] || fail 'expected inspect <tag> <candidate> <prerelease>.'
 		inspect_release "$2" "$3" "$4"
 		;;
+	inspect-created)
+		[[ $# -eq 4 ]] || fail 'expected inspect-created <tag> <candidate> <prerelease>.'
+		inspect_created_release "$2" "$3" "$4"
+		;;
 	verify)
 		[[ $# -eq 7 ]] \
 			|| fail 'expected verify <tag> <archive> <release-id> <candidate> <prerelease> <pending|published>.'
 		verify_asset "$2" "$3" "$4" "$5" "$6" "$7"
 		;;
-	*) fail 'expected inspect or verify command.' ;;
+	*) fail 'expected inspect, inspect-created, or verify command.' ;;
 esac

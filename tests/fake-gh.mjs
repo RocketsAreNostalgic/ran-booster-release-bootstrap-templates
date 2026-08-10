@@ -30,7 +30,13 @@ if (arguments_[0] === "api") {
     if (matches.length !== 1) notFound();
     response = matches[0];
   } else if (endpoint?.includes("/releases?")) {
-    response = state.release_pages ?? releases;
+    if ((state.release_inventory_lag ?? 0) > 0) {
+      state.release_inventory_lag -= 1;
+      response = [];
+      save();
+    } else {
+      response = state.release_pages ?? releases;
+    }
   } else if (/\/releases\/[1-9][0-9]*$/.test(endpoint ?? "")) {
     const releaseId = Number(endpoint.split("/releases/")[1]);
     response = releases.find((release) => release.id === releaseId);

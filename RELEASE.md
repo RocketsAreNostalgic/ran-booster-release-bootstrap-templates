@@ -71,8 +71,20 @@ Both repository and generated publishers now recover a unique draft from the
 authenticated paginated release inventory and use its numeric release ID for
 pending asset readback. A non-404 lookup failure, duplicate tag identity,
 list-only published release, wrong target, wrong state, or wrong asset remains
-blocking. Release Please must generate a fresh candidate containing this fix;
-controller-only bytes may never be substituted for an older candidate.
+blocking. Candidate `4b4a340d238eada8e73f12745e3f929788cb8942`
+then exposed a separate bounded-consistency outcome: immediately after draft
+creation, the authenticated inventory briefly returned no matching draft.
+Publisher run `31418678601` stopped with only empty mutable draft `368116056`;
+there was no tag, asset, publication, or tagged label. That draft was verified
+and deleted, and pull request 8 was marked `autorelease: abandoned`.
+
+Both publishers therefore provide an `inspect-created` operation that retries
+only the exact absent-to-draft readback within a fixed delay window. It still
+fails immediately on contradictory identity/state, and it fails closed if the
+draft never becomes visible. Executable fake-GitHub outcomes cover delayed
+visibility and bounded exhaustion. Release Please must generate a fresh
+candidate containing this fix; controller-only bytes may never be substituted
+for either abandoned candidate.
 
 Patch and minor stable releases may change template bodies while the manifest
 schema, logical IDs, placeholders, profiles, and consumer-owned capabilities

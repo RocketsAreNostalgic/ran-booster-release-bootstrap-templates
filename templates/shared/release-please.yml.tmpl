@@ -5,19 +5,19 @@ name: Release Please
 on:
   push:
     branches:
-      - '{{RAN_DEFAULT_BRANCH}}'
+      - "{{RAN_DEFAULT_BRANCH}}"
   workflow_run:
     workflows:
       - Quality
     types:
       - completed
     branches:
-      - '{{RAN_DEFAULT_BRANCH}}'
+      - "{{RAN_DEFAULT_BRANCH}}"
 
 permissions: {}
 
 concurrency:
-  group: 'release-please-{{RAN_DEFAULT_BRANCH}}'
+  group: "release-please-{{RAN_DEFAULT_BRANCH}}"
   cancel-in-progress: false
 
 jobs:
@@ -50,7 +50,7 @@ jobs:
       issues: write
       pull-requests: read
     env:
-      RAN_RELEASE_BRANCH: '{{RAN_DEFAULT_BRANCH}}'
+      RAN_RELEASE_BRANCH: "{{RAN_DEFAULT_BRANCH}}"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -161,7 +161,7 @@ jobs:
               --generate-notes \
               "${prerelease[@]}"
           fi
-          release_decision="$(bash scripts/upload-release-assets.sh inspect \
+          release_decision="$(bash scripts/upload-release-assets.sh inspect-created \
             "$RAN_RELEASE_TAG" "$RAN_RELEASE_COMMIT" "$RAN_RELEASE_PRERELEASE")"
           test "$(jq -er '.state' <<< "$release_decision")" = draft
           release_id="$(jq -er '.release_id' <<< "$release_decision")"
