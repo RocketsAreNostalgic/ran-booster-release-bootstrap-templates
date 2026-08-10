@@ -8,8 +8,37 @@ fail() {
 
 repository=${GITHUB_REPOSITORY:-}
 branch=main
+control_commit=${RAN_RELEASE_CONTROL_COMMIT:-}
+recovery_tuple=${RAN_RELEASE_RECOVERY:-}
 [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
 	|| fail 'GITHUB_REPOSITORY is invalid.'
+[[ -z "$control_commit" || "$control_commit" =~ ^[0-9a-f]{40}$ ]] \
+	|| fail 'release control commit is invalid.'
+
+validate_recovery() {
+	local candidate=$1 ancestry
+	[[ "$recovery_tuple" == 31417475890:2 ]] \
+		|| fail 'release recovery tuple is invalid.'
+	[[ "$candidate" == 4b4a340d238eada8e73f12745e3f929788cb8942 ]] \
+		|| fail 'release recovery candidate is invalid.'
+	[[ $(git rev-parse HEAD) == "$control_commit" ]] \
+		|| fail 'HEAD is not the release control commit.'
+	read -r -a ancestry <<< "$(git rev-list --parents -n 1 "$control_commit")"
+	[[ ${#ancestry[@]} -eq 3 \
+		&& ${ancestry[0]} == "$control_commit" \
+		&& ${ancestry[1]} == "$candidate" ]] \
+		|| fail 'release control parent is invalid.'
+	[[ $(git rev-parse "${control_commit}^{tree}") == $(git rev-parse "${ancestry[2]}^{tree}") ]] \
+		|| fail 'release control tree differs from its correction head.'
+	mapfile -t control_changes < <(git diff --name-only "$candidate" "$control_commit")
+	[[ ${#control_changes[@]} -eq 5 \
+		&& ${control_changes[0]} == .github/workflows/quality.yml \
+		&& ${control_changes[1]} == .github/workflows/release-please.yml \
+		&& ${control_changes[2]} == scripts/release-candidate.mjs \
+		&& ${control_changes[3]} == scripts/upload-pack.sh \
+		&& ${control_changes[4]} == tests/run.mjs ]] \
+		|| fail 'release control changes exceed the recovery allowlist.'
+}
 
 release_json() {
 	local tag=$1 response inventory count
@@ -58,6 +87,7 @@ inspect_release() {
 	[[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'release tag is invalid.'
 	[[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || fail 'release candidate is invalid.'
 	[[ "$prerelease" == false ]] || fail 'template-pack releases must be stable.'
+	[[ -z "$control_commit" ]] || validate_recovery "$candidate"
 
 	if response=$(release_json "$tag" 2>&1); then
 		jq -e \
@@ -95,7 +125,8 @@ inspect_release() {
 			'.object.type == "commit" and .object.sha == $candidate' \
 			<<< "$response" >/dev/null || fail 'published tag target is invalid.'
 	else
-		[[ $(gh api "repos/${repository}/git/ref/heads/${branch}" --jq '.object.sha') == "$candidate" ]] \
+		local expected_main=${control_commit:-$candidate}
+		[[ $(gh api "repos/${repository}/git/ref/heads/${branch}" --jq '.object.sha') == "$expected_main" ]] \
 			|| fail 'default branch moved away from the candidate.'
 		if response=$(tag_json "$tag" 2>&1); then
 			fail 'tag exists before verified publication.'

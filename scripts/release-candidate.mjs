@@ -12,7 +12,58 @@ assert(
 assert(validBranch(defaultBranch), "Default branch is invalid.");
 assert(validBranch(expectedHead), "Release Please branch is invalid.");
 assert(pullRequestsFile, "Pull request evidence is required.");
-assert(git("rev-parse", "HEAD") === candidate, "HEAD is not the candidate.");
+const controlCommit = process.env.RAN_RELEASE_CONTROL_COMMIT ?? "";
+if (controlCommit) {
+  assert(
+    process.env.RAN_RELEASE_RECOVERY === "31417475890:2",
+    "Release recovery tuple is invalid.",
+  );
+  assert(
+    candidate === "4b4a340d238eada8e73f12745e3f929788cb8942",
+    "Release recovery candidate is invalid.",
+  );
+  assert(
+    /^[0-9a-f]{40}$/.test(controlCommit),
+    "Release control commit is invalid.",
+  );
+  assert(
+    git("rev-parse", "HEAD") === controlCommit,
+    "HEAD is not the release control commit.",
+  );
+  const controlAncestry = git(
+    "rev-list",
+    "--parents",
+    "-n",
+    "1",
+    controlCommit,
+  ).split(" ");
+  assert(
+    controlAncestry.length === 3 &&
+      controlAncestry[0] === controlCommit &&
+      controlAncestry[1] === candidate,
+    "Release control parent is invalid.",
+  );
+  assert(
+    git("rev-parse", `${controlCommit}^{tree}`) ===
+      git("rev-parse", `${controlAncestry[2]}^{tree}`),
+    "Release control tree differs from its correction head.",
+  );
+  assert(
+    JSON.stringify(
+      git("diff", "--name-only", candidate, controlCommit).split("\n"),
+    ) ===
+      JSON.stringify([
+        ".github/workflows/quality.yml",
+        ".github/workflows/release-please.yml",
+        "scripts/release-candidate.mjs",
+        "scripts/upload-pack.sh",
+        "tests/run.mjs",
+      ]),
+    "Release control changes exceed the recovery allowlist.",
+  );
+} else {
+  assert(git("rev-parse", "HEAD") === candidate, "HEAD is not the candidate.");
+}
 
 const ancestry = git("rev-list", "--parents", "-n", "1", candidate).split(" ");
 assert(
@@ -24,16 +75,51 @@ assert(
   changed(baseCommit, candidate, ".release-please-manifest.json"),
   "Candidate does not change the Release Please manifest.",
 );
+const manifestOwner = git(
+  "log",
+  "-1",
+  "--format=%H",
+  releaseHead,
+  "--",
+  ".release-please-manifest.json",
+);
+assert(manifestOwner, "Release Please manifest owner is missing.");
 assert(
-  git(
-    "log",
-    "-1",
-    "--format=%H",
-    candidate,
-    "--",
-    ".release-please-manifest.json",
-  ) === releaseHead,
+  git("rev-parse", `${manifestOwner}^`) === baseCommit &&
+    spawnSync("git", [
+      "merge-base",
+      "--is-ancestor",
+      manifestOwner,
+      releaseHead,
+    ]).status === 0,
   "Release Please head does not own the manifest change.",
+);
+assert(
+  JSON.stringify(
+    git("diff", "--name-only", baseCommit, manifestOwner).split("\n"),
+  ) ===
+    JSON.stringify([
+      ".release-please-manifest.json",
+      "CHANGELOG.md",
+      "package.json",
+    ]),
+  "Release Please manifest commit changes unexpected paths.",
+);
+assert(
+  git("rev-list", "--merges", `${baseCommit}..${releaseHead}`) === "",
+  "Release Please head contains a merge commit.",
+);
+const postManifestChanges = git(
+  "diff",
+  "--name-only",
+  manifestOwner,
+  releaseHead,
+)
+  .split("\n")
+  .filter(Boolean);
+assert(
+  postManifestChanges.every((file) => file === "CHANGELOG.md"),
+  "Release Please post-manifest changes exceed the changelog correction boundary.",
 );
 assert(
   git("rev-parse", `${candidate}^{tree}`) ===
