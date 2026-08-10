@@ -109,6 +109,23 @@ async function assertRepositoryWorkflows() {
   assert.match(release, /candidate_commit == \$candidate_commit/);
   assert.match(releaseCandidate, /base\?\.sha === baseCommit/);
   assert.match(release, /test "\$pending" = true/);
+  for (const [field, expected] of [
+    ["pending", "true"],
+    ["tagged", "false"],
+  ]) {
+    const filter = release.match(
+      new RegExp(
+        `${field}="\\$\\(jq -r '([^']+)' <<< "\\$decision"\\)"`,
+      ),
+    )?.[1];
+    assert.ok(filter, `${field} must use a false-safe typed jq reader.`);
+    const readback = spawnSync("jq", ["-r", filter], {
+      encoding: "utf8",
+      input: JSON.stringify({ pending: true, tagged: false }),
+    });
+    assert.equal(readback.status, 0, readback.stderr);
+    assert.equal(readback.stdout.trim(), expected);
+  }
   assert.equal(
     (release.match(/bash scripts\/build-pack\.sh/g) ?? []).length,
     1,

@@ -69,8 +69,8 @@ jobs:
             'release-please--branches--main--components--ran-booster-release-bootstrap-templates' \
             "$pulls")"
           release_pr_number="$(jq -er '.release_pr_number' <<< "$decision")"
-          pending="$(jq -er '.pending' <<< "$decision")"
-          tagged="$(jq -er '.tagged' <<< "$decision")"
+          pending="$(jq -r 'if (.pending | type) == "boolean" then .pending else error("pending is not boolean") end' <<< "$decision")"
+          tagged="$(jq -r 'if (.tagged | type) == "boolean" then .tagged else error("tagged is not boolean") end' <<< "$decision")"
           tag="$(jq -er '.tag' <<< "$decision")"
           version="$(jq -er '.version' <<< "$decision")"
 
