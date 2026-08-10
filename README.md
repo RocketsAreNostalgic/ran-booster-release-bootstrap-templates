@@ -53,6 +53,11 @@ upload and immutable readback. In particular, current source version `0.2.0`
 must never be confused with or substituted for the historical immutable API 1
 release at `v0.2.0`.
 
+After draft creation, both the repository publisher and every generated
+publisher use a bounded exact-draft discovery readback. They tolerate only the
+brief absent-to-draft propagation window; contradictory identities, API errors,
+or a draft that remains unavailable fail closed before any asset upload.
+
 Before extraction, both verifiers parse the ZIP central directory and local
 records, reject unsafe or ambiguous paths and member types, enforce fixed
 archive, member, expanded-size, and compression-ratio limits, and validate each
