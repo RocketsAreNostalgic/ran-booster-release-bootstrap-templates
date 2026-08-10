@@ -56,6 +56,24 @@ candidate: source still declares `0.2.0`, while immutable historical `v0.2.0`
 is API 1 and cannot be replaced. The publication workflow must qualify the
 future release merge and build the final bytes with its actual draft ID.
 
+## Abandoned candidate recovery
+
+An unpublished candidate is not a release and must never be marked
+`autorelease: tagged`. Candidate `b288b28cfd9c77f4b998c32427f77af045b0e68b`
+exposed that GitHub's release-by-tag endpoint does not return an exact draft.
+Its empty draft, release ID `368032667`, was verified as mutable, stable,
+targeted at that commit, and free of assets; it was then deleted before any tag
+or publication. The merged Release Please pull request remains auditable as
+`autorelease: abandoned`, while manifest, package, and unreleased changelog
+state were restored to `0.2.0`.
+
+Both repository and generated publishers now recover a unique draft from the
+authenticated paginated release inventory and use its numeric release ID for
+pending asset readback. A non-404 lookup failure, duplicate tag identity,
+list-only published release, wrong target, wrong state, or wrong asset remains
+blocking. Release Please must generate a fresh candidate containing this fix;
+controller-only bytes may never be substituted for an older candidate.
+
 Patch and minor stable releases may change template bodies while the manifest
 schema, logical IDs, placeholders, profiles, and consumer-owned capabilities
 remain compatible with Consumer API 2. Any new consumer capability requires a
