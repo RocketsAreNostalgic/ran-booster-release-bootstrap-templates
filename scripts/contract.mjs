@@ -11,8 +11,8 @@ export const repositoryName =
   "RocketsAreNostalgic/ran-booster-release-bootstrap-templates";
 
 export const profileFiles = [
-  "profiles/source-ready-wordpress-plugin-1.json",
-  "profiles/source-ready-wordpress-theme-1.json",
+  "profiles/source-ready-wordpress-plugin-2.json",
+  "profiles/source-ready-wordpress-theme-2.json",
 ];
 
 export const logicalIds = [
@@ -92,8 +92,8 @@ export function validateSource(source, profiles) {
     "source manifest",
   );
   assert(
-    source.schema_version === 1 && source.consumer_api === 1,
-    "Only Consumer API 1 is supported.",
+    source.schema_version === 1 && source.consumer_api === 2,
+    "Only Consumer API 2 is supported.",
   );
   assert(
     JSON.stringify(source.profiles) === JSON.stringify(profileFiles),
@@ -116,8 +116,8 @@ export function validatePublished(manifest) {
     "manifest",
   );
   assert(
-    manifest.schema_version === 1 && manifest.consumer_api === 1,
-    "Only Consumer API 1 is supported.",
+    manifest.schema_version === 1 && manifest.consumer_api === 2,
+    "Only Consumer API 2 is supported.",
   );
   assert(
     stableVersion(manifest.pack_version),
@@ -152,8 +152,8 @@ export function validatePublished(manifest) {
 
 export function validateProfiles(profiles, published) {
   const expectedIds = [
-    "source-ready-wordpress-plugin/1",
-    "source-ready-wordpress-theme/1",
+    "source-ready-wordpress-plugin/2",
+    "source-ready-wordpress-theme/2",
   ];
   exactKeys(profiles, expectedIds, "profiles");
   for (const profileId of expectedIds) {

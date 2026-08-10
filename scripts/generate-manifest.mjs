@@ -100,7 +100,7 @@ for (const [profileId, profile] of Object.entries(sourceProfiles)) {
 
 const manifest = {
   schema_version: 1,
-  consumer_api: 1,
+  consumer_api: 2,
   pack_version: version,
   repository: { name: repositoryName, id: repositoryId },
   release: {

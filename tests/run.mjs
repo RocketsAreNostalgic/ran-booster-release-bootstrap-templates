@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -26,7 +35,7 @@ try {
   const schema = await loadJson(
     path.join(root, "schema/template-pack.schema.json"),
   );
-  assert.equal(schema.properties.consumer_api.const, 1);
+  assert.equal(schema.properties.consumer_api.const, 2);
   assert.equal(schema.additionalProperties, false);
 
   const source = await loadJson(
@@ -43,10 +52,12 @@ try {
   );
   validateSource(source, profiles);
   await assertRepositoryWorkflows();
+  await assertReleaseCandidateDecisions();
+  await assertPublisherReleaseOutcomes();
   await renderFixtures(profiles);
   await assertDeterministicPack();
   await assertTamperFails();
-  process.stdout.write("All Consumer API 1 template-pack tests passed.\n");
+  process.stdout.write("All Consumer API 2 template-pack tests passed.\n");
 } finally {
   await rm(temporary, { recursive: true, force: true });
 }
@@ -58,6 +69,10 @@ async function assertRepositoryWorkflows() {
   );
   const release = await readFile(
     path.join(root, ".github/workflows/release-please.yml"),
+    "utf8",
+  );
+  const releaseCandidate = await readFile(
+    path.join(root, "scripts/release-candidate.mjs"),
     "utf8",
   );
 
@@ -72,16 +87,524 @@ async function assertRepositoryWorkflows() {
 
   assert.match(quality, /actions\/upload-artifact@[0-9a-f]{40}/);
   assert.match(quality, /git archive --format=tar/);
+  assert.doesNotMatch(quality, /release-candidate/);
+  assert.doesNotMatch(quality, /^\s+if:.*release-candidate/m);
+  assert.match(quality, /candidate_commit: \$candidate_commit/);
   assert.match(release, /^\s+workflow_run:/m);
   assert.match(release, /workflow_run\.conclusion == 'success'/);
   assert.match(release, /workflow_run\.head_repository\.full_name/);
   assert.match(release, /workflow_run\.head_sha/);
   assert.match(release, /actions\/download-artifact@[0-9a-f]{40}/);
   assert.match(release, /run-id: \$\{\{ github\.event\.workflow_run\.id \}\}/);
-  assert.match(release, /\.merge_commit_sha == \$quality/);
+  assert.match(release, /scripts\/release-candidate\.mjs/);
+  assert.match(release, /printf 'PACK_COMMIT=%s/);
+  assert.match(release, /"\$RAN_QUALITY_COMMIT"/);
+  assert.match(release, /candidate_commit == \$candidate_commit/);
+  assert.match(releaseCandidate, /base\?\.sha === baseCommit/);
   assert.match(release, /test "\$pending" = true/);
-  assert.equal((release.match(/bash "\$source\/scripts\/build-pack\.sh"/g) ?? []).length, 1);
+  assert.equal(
+    (release.match(/bash "\$source\/scripts\/build-pack\.sh"/g) ?? []).length,
+    1,
+  );
   assert.doesNotMatch(release, /^\s+publish-pack:/m);
+}
+
+async function assertReleaseCandidateDecisions() {
+  const fixture = await createReleaseFixture("eligible");
+  const pullRequest = eligiblePullRequest(fixture);
+  const decision = runReleaseCandidate(fixture, [[pullRequest]]);
+  assert.equal(decision.candidate, fixture.candidate);
+  assert.equal(decision.release_head, fixture.releaseHead);
+  assert.equal(decision.release_pr_number, 17);
+  assert.equal(decision.pending, true);
+  assert.equal(decision.tagged, false);
+  assert.equal(decision.tag, "v0.3.0");
+  const taggedDecision = runReleaseCandidate(fixture, [
+    [{ ...pullRequest, labels: [{ name: "autorelease: tagged" }] }],
+  ]);
+  assert.equal(taggedDecision.pending, false);
+  assert.equal(taggedDecision.tagged, true);
+
+  const rejectedPullRequests = [
+    ["missing", []],
+    ["ambiguous", [[pullRequest], [{ ...pullRequest, number: 18 }]]],
+    [
+      "wrong base",
+      [{ ...pullRequest, base: { ...pullRequest.base, ref: "develop" } }],
+    ],
+    [
+      "wrong base SHA",
+      [
+        {
+          ...pullRequest,
+          base: { ...pullRequest.base, sha: "e".repeat(40) },
+        },
+      ],
+    ],
+    [
+      "wrong head",
+      [{ ...pullRequest, head: { ...pullRequest.head, sha: fixture.base } }],
+    ],
+    ["wrong merge", [{ ...pullRequest, merge_commit_sha: fixture.base }]],
+    [
+      "wrong repository",
+      [
+        {
+          ...pullRequest,
+          head: {
+            ...pullRequest.head,
+            repo: { full_name: "attacker/fork" },
+          },
+        },
+      ],
+    ],
+    ["wrong author", [{ ...pullRequest, user: { login: "untrusted-user" } }]],
+    ["unmerged", [{ ...pullRequest, merged_at: null }]],
+    ["missing lifecycle", [{ ...pullRequest, labels: [] }]],
+    [
+      "conflicting lifecycle",
+      [
+        {
+          ...pullRequest,
+          labels: [
+            { name: "autorelease: pending" },
+            { name: "autorelease: tagged" },
+          ],
+        },
+      ],
+    ],
+  ];
+  for (const [label, pullRequests] of rejectedPullRequests) {
+    const result = runReleaseCandidate(fixture, pullRequests, false);
+    assert.notEqual(result.status, 0, `${label} candidate evidence passed.`);
+  }
+
+  const oneParent = { ...fixture, candidate: fixture.releaseHead };
+  git(fixture.directory, "checkout", "--detach", fixture.releaseHead);
+  assert.notEqual(
+    runReleaseCandidate(oneParent, [pullRequest], false).status,
+    0,
+    "A one-parent release head passed as the green merge candidate.",
+  );
+
+  const differentTree = await createReleaseFixture("different-tree", {
+    differentTree: true,
+  });
+  assert.notEqual(
+    runReleaseCandidate(
+      differentTree,
+      [eligiblePullRequest(differentTree)],
+      false,
+    ).status,
+    0,
+    "A merge with bytes absent from the Release Please head passed.",
+  );
+
+  const noManifest = await createReleaseFixture("no-manifest", {
+    changeManifest: false,
+  });
+  assert.notEqual(
+    runReleaseCandidate(noManifest, [eligiblePullRequest(noManifest)], false)
+      .status,
+    0,
+    "A merge without a Release Please manifest change passed.",
+  );
+}
+
+async function createReleaseFixture(
+  name,
+  { changeManifest = true, differentTree = false } = {},
+) {
+  const directory = path.join(temporary, `release-candidate-${name}`);
+  const expectedHead =
+    "release-please--branches--main--components--ran-booster-release-bootstrap-templates";
+  await mkdir(directory, { recursive: true });
+  git(directory, "init", "-b", "main");
+  git(directory, "config", "user.email", "fixture@example.test");
+  git(directory, "config", "user.name", "Fixture");
+  await writeFile(
+    path.join(directory, "package.json"),
+    `${JSON.stringify({ version: "0.2.0" })}\n`,
+  );
+  await writeFile(
+    path.join(directory, ".release-please-manifest.json"),
+    `${JSON.stringify({ ".": "0.2.0" })}\n`,
+  );
+  git(directory, "add", ".");
+  git(directory, "commit", "-m", "chore: fixture base");
+  git(directory, "checkout", "-b", expectedHead);
+  if (changeManifest) {
+    await writeFile(
+      path.join(directory, "package.json"),
+      `${JSON.stringify({ version: "0.3.0" })}\n`,
+    );
+    await writeFile(
+      path.join(directory, ".release-please-manifest.json"),
+      `${JSON.stringify({ ".": "0.3.0" })}\n`,
+    );
+  } else {
+    await writeFile(path.join(directory, "release-notes.txt"), "No version.\n");
+  }
+  git(directory, "add", ".");
+  git(directory, "commit", "-m", "chore(main): release fixture");
+  const releaseHead = git(directory, "rev-parse", "HEAD");
+
+  git(directory, "checkout", "main");
+  if (differentTree) {
+    await writeFile(path.join(directory, "main-only.txt"), "main movement\n");
+    git(directory, "add", "main-only.txt");
+    git(directory, "commit", "-m", "fix: concurrent main change");
+  }
+  git(directory, "merge", "--no-ff", expectedHead, "-m", "Merge release PR");
+  const candidate = git(directory, "rev-parse", "HEAD");
+  return {
+    base: git(directory, "rev-parse", `${candidate}^1`),
+    candidate,
+    directory,
+    expectedHead,
+    releaseHead,
+  };
+}
+
+function eligiblePullRequest(fixture) {
+  return {
+    number: 17,
+    merged_at: "2026-08-10T10:00:00Z",
+    base: {
+      ref: "main",
+      sha: fixture.base,
+      repo: {
+        full_name:
+          "RocketsAreNostalgic/ran-booster-release-bootstrap-templates",
+      },
+    },
+    head: {
+      ref: fixture.expectedHead,
+      repo: {
+        full_name:
+          "RocketsAreNostalgic/ran-booster-release-bootstrap-templates",
+      },
+      sha: fixture.releaseHead,
+    },
+    labels: [{ name: "autorelease: pending" }],
+    merge_commit_sha: fixture.candidate,
+    user: { login: "github-actions[bot]" },
+  };
+}
+
+function runReleaseCandidate(fixture, pullRequests, successful = true) {
+  const pullRequestsFile = path.join(fixture.directory, "pull-requests.json");
+  writeFileSync(pullRequestsFile, JSON.stringify(pullRequests));
+  const arguments_ = [
+    path.join(root, "scripts/release-candidate.mjs"),
+    fixture.candidate,
+    "RocketsAreNostalgic/ran-booster-release-bootstrap-templates",
+    "main",
+    fixture.expectedHead,
+    pullRequestsFile,
+  ];
+  if (!successful)
+    return spawnSync(process.execPath, arguments_, {
+      cwd: fixture.directory,
+      encoding: "utf8",
+    });
+  return JSON.parse(
+    execFileSync(process.execPath, arguments_, {
+      cwd: fixture.directory,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  );
+}
+
+function git(directory, ...arguments_) {
+  return execFileSync("git", arguments_, {
+    cwd: directory,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+async function assertPublisherReleaseOutcomes() {
+  const harness = path.join(temporary, "publisher-harness");
+  const bin = path.join(harness, "bin");
+  await mkdir(bin, { recursive: true });
+  const fakeGh = path.join(bin, "gh");
+  await writeFile(
+    fakeGh,
+    `#!/bin/sh\nexec "${process.execPath}" "${path.join(root, "tests/fake-gh.mjs")}" "$@"\n`,
+  );
+  await chmod(fakeGh, 0o755);
+
+  const publishers = [
+    {
+      archive: "ran-booster-release-bootstrap-templates.zip",
+      branchEnvironment: {},
+      prerelease: false,
+      script: path.join(root, "scripts/upload-pack.sh"),
+      tag: "v0.3.0",
+    },
+    {
+      archive: "example-package-1.2.3-beta.1.zip",
+      branchEnvironment: { RAN_RELEASE_BRANCH: "main" },
+      prerelease: true,
+      script: path.join(root, "templates/shared/upload-release-assets.sh.tmpl"),
+      tag: "v1.2.3-beta.1",
+    },
+  ];
+
+  for (const [publisherIndex, publisher] of publishers.entries()) {
+    const publisherRoot = path.join(harness, `publisher-${publisherIndex}`);
+    await mkdir(publisherRoot, { recursive: true });
+    const archive = path.join(publisherRoot, publisher.archive);
+    const remote = path.join(publisherRoot, "remote.zip");
+    const candidate = "1234567890abcdef1234567890abcdef12345678";
+    await writeFile(archive, `candidate-${publisherIndex}\n`);
+    const archiveBytes = await readFile(archive);
+    const asset = releaseAsset(publisher.archive, archiveBytes);
+    const base = {
+      branch_sha: candidate,
+      calls: [],
+      release: null,
+      remote_asset: remote,
+      tag: null,
+    };
+    const release = releaseRecord({
+      assets: [],
+      candidate,
+      prerelease: publisher.prerelease,
+      tag: publisher.tag,
+    });
+    const inspect = [
+      "inspect",
+      publisher.tag,
+      candidate,
+      String(publisher.prerelease),
+    ];
+    const verify = (mode) => [
+      "verify",
+      publisher.tag,
+      archive,
+      "41",
+      candidate,
+      String(publisher.prerelease),
+      mode,
+    ];
+
+    const absent = runPublisher(publisher, inspect, base, bin, publisherRoot);
+    assert.equal(JSON.parse(absent.stdout).state, "absent");
+    assertPublisherFails(
+      publisher,
+      inspect,
+      { ...base, branch_sha: "a".repeat(40) },
+      bin,
+      publisherRoot,
+      "main movement",
+    );
+    assertPublisherFails(
+      publisher,
+      inspect,
+      { ...base, tag: { sha: candidate } },
+      bin,
+      publisherRoot,
+      "preexisting tag",
+    );
+
+    const exactDraft = { ...base, release };
+    const draft = runPublisher(
+      publisher,
+      inspect,
+      exactDraft,
+      bin,
+      publisherRoot,
+    );
+    assert.equal(JSON.parse(draft.stdout).state, "draft");
+    for (const [label, invalidRelease] of [
+      ["wrong release tag", { ...release, tag_name: "v9.9.9" }],
+      ["wrong target", { ...release, target_commitish: "b".repeat(40) }],
+      ["wrong release ID", { ...release, id: 0 }],
+      ["wrong prerelease", { ...release, prerelease: !publisher.prerelease }],
+      ["mutable publication", { ...release, draft: false, immutable: false }],
+    ]) {
+      assertPublisherFails(
+        publisher,
+        inspect,
+        { ...base, release: invalidRelease },
+        bin,
+        publisherRoot,
+        label,
+      );
+    }
+
+    const pending = runPublisher(
+      publisher,
+      verify("pending"),
+      exactDraft,
+      bin,
+      publisherRoot,
+    );
+    assert.deepEqual(pending.state.calls, ["upload", "download"]);
+    assert.deepEqual(pending.state.release.assets, [asset]);
+
+    await writeFile(remote, archiveBytes);
+    const exactAssetDraft = {
+      ...base,
+      release: { ...release, assets: [asset] },
+    };
+    const draftRetry = runPublisher(
+      publisher,
+      verify("pending"),
+      exactAssetDraft,
+      bin,
+      publisherRoot,
+    );
+    assert.deepEqual(draftRetry.state.calls, ["download"]);
+
+    const publishedRelease = {
+      ...release,
+      assets: [asset],
+      draft: false,
+      immutable: true,
+    };
+    const lostAcknowledgement = {
+      ...base,
+      branch_sha: "c".repeat(40),
+      release: publishedRelease,
+      tag: { sha: candidate },
+    };
+    const published = runPublisher(
+      publisher,
+      verify("published"),
+      lostAcknowledgement,
+      bin,
+      publisherRoot,
+    );
+    assert.deepEqual(published.state.calls, ["download"]);
+    assert.equal(published.state.calls.includes("upload"), false);
+
+    for (const [label, invalidAssets] of [
+      ["missing asset", []],
+      ["extra asset", [asset, { ...asset, id: 902, name: "extra.zip" }]],
+      ["wrong asset name", [{ ...asset, name: "wrong.zip" }]],
+      ["wrong asset size", [{ ...asset, size: asset.size + 1 }]],
+      ["wrong asset state", [{ ...asset, state: "new" }]],
+      [
+        "wrong asset digest",
+        [{ ...asset, digest: `sha256:${"0".repeat(64)}` }],
+      ],
+    ]) {
+      assertPublisherFails(
+        publisher,
+        verify("published"),
+        {
+          ...lostAcknowledgement,
+          release: { ...publishedRelease, assets: invalidAssets },
+        },
+        bin,
+        publisherRoot,
+        label,
+      );
+    }
+    assertPublisherFails(
+      publisher,
+      inspect,
+      {
+        ...lostAcknowledgement,
+        tag: { sha: "d".repeat(40) },
+      },
+      bin,
+      publisherRoot,
+      "wrong published tag target",
+    );
+
+    await writeFile(remote, "different bytes\n");
+    assertPublisherFails(
+      publisher,
+      verify("published"),
+      lostAcknowledgement,
+      bin,
+      publisherRoot,
+      "mismatched downloaded bytes",
+    );
+  }
+}
+
+function runPublisher(publisher, arguments_, state, bin, directory) {
+  const stateFile = path.join(directory, "fake-gh-state.json");
+  writeFileSync(stateFile, `${JSON.stringify(structuredClone(state))}\n`);
+  const result = spawnSync("bash", [publisher.script, ...arguments_], {
+    cwd: directory,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ...publisher.branchEnvironment,
+      GITHUB_REPOSITORY:
+        "RocketsAreNostalgic/ran-booster-release-bootstrap-templates",
+      PATH: `${bin}:${process.env.PATH}`,
+      RAN_FAKE_GH_STATE: stateFile,
+      RAN_RELEASE_READBACK_DELAYS: "0",
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return {
+    ...result,
+    state: JSON.parse(readFileSync(stateFile, "utf8")),
+  };
+}
+
+function assertPublisherFails(
+  publisher,
+  arguments_,
+  state,
+  bin,
+  directory,
+  label,
+) {
+  const stateFile = path.join(directory, `fake-gh-state-${label}.json`);
+  writeFileSync(stateFile, `${JSON.stringify(structuredClone(state))}\n`);
+  const result = spawnSync("bash", [publisher.script, ...arguments_], {
+    cwd: directory,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ...publisher.branchEnvironment,
+      GITHUB_REPOSITORY:
+        "RocketsAreNostalgic/ran-booster-release-bootstrap-templates",
+      PATH: `${bin}:${process.env.PATH}`,
+      RAN_FAKE_GH_STATE: stateFile,
+      RAN_RELEASE_READBACK_DELAYS: "0",
+    },
+  });
+  assert.notEqual(result.status, 0, `${label} unexpectedly passed.`);
+  const finalState = JSON.parse(readFileSync(stateFile, "utf8"));
+  assert.equal(
+    finalState.calls.includes("upload"),
+    false,
+    `${label} performed an unsafe upload.`,
+  );
+}
+
+function releaseRecord({ assets, candidate, prerelease, tag }) {
+  return {
+    id: 41,
+    tag_name: tag,
+    target_commitish: candidate,
+    draft: true,
+    immutable: false,
+    prerelease,
+    assets,
+  };
+}
+
+function releaseAsset(name, bytes) {
+  return {
+    id: 901,
+    name,
+    size: bytes.length,
+    state: "uploaded",
+    content_type: "application/zip",
+    digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+  };
 }
 
 async function renderFixtures(profiles) {
@@ -147,15 +670,26 @@ function fixtureName(logicalId) {
 
 function validateManagedWorkflow(workflow) {
   assert.match(workflow, /^on:\n  push:\n    branches:/m);
+  assert.match(workflow, /^  workflow_run:\n    workflows:\n      - Quality/m);
   assert.match(workflow, /^permissions: \{\}$/m);
   assert.match(workflow, /googleapis\/release-please-action@[0-9a-f]{40}/);
   assert.match(workflow, /actions\/checkout@[0-9a-f]{40}/);
+  assert.match(workflow, /github\.event_name == 'workflow_run'/);
+  assert.match(workflow, /workflow_run\.conclusion == 'success'/);
+  assert.match(workflow, /workflow_run\.head_repository\.full_name/);
   assert.match(
     workflow,
-    /git cat-file -e 'HEAD\^:\.release-please-manifest\.json'/,
+    /ref: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/,
   );
-  assert.match(workflow, /\.immutable == true/);
+  assert.match(workflow, /\.merge_commit_sha == \$candidate/);
+  assert.match(workflow, /\.base\.sha == \$base/);
+  assert.match(workflow, /\.head\.sha == \$release_head/);
+  assert.match(workflow, /--target "\$RAN_RELEASE_COMMIT"/);
+  assert.match(workflow, /upload-release-assets\.sh verify/);
+  assert.match(workflow, /^            published$/m);
   assert.match(workflow, /\.ran-booster-release-dist/);
+  assert.doesNotMatch(workflow, /^    needs: release-please$/m);
+  assert.doesNotMatch(workflow, /Consumer API 1/);
   assert.doesNotMatch(workflow, /rm -rf build/);
   assert.doesNotMatch(workflow, /uses: [^\n]+@(main|master|v\d+)\s*$/m);
 }

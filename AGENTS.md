@@ -13,17 +13,21 @@ Release Deployments. It is an independent product, not a WordPress plugin.
 - Do not add executable package dependencies. Template files may become CI or
   shell code in another repository, so every change requires fixture rendering
   and review of the exact generated output.
-- Consumer API 1 is exact. A new placeholder, logical ID, profile, manifest
-  field, workflow trigger, permission, or consumer capability requires a new
-  consumer API and a compatible Release Deployments release.
+- Consumer API 2 is the sole forward contract. Historical Consumer API 1 packs
+  remain immutable evidence and are not supported setup or update authority.
+  A new placeholder, logical ID, profile, manifest field, workflow trigger,
+  permission, or consumer capability requires a new consumer API and a
+  compatible Release Deployments release.
 - Published assets and historical releases are immutable. Never replace a pack
   asset for an existing tag.
 
 ## Required checks
 
-Run `npm test`. It validates the source contract, renders plugin and theme
-fixtures, checks JSON and shell syntax, builds the pack twice, compares the
-bytes, and verifies the archive and member digests.
+Run `npm test`. It validates the source contract and real-Git release-candidate
+decisions, renders plugin and theme fixtures, checks JSON and shell syntax,
+builds the pack twice, compares the bytes, and verifies the archive and member
+digests. Full tests are mandatory on every pull request, including Release
+Please pull requests.
 
 Release Please owns `CHANGELOG.md`; keep `/CHANGELOG.md` in `.prettierignore`.
 Use Conventional Commits. Do not manually edit release tags or generated

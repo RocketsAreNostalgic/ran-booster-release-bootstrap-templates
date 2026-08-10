@@ -14,7 +14,7 @@
   ],
   "properties": {
     "schema_version": { "const": 1 },
-    "consumer_api": { "const": 1 },
+    "consumer_api": { "const": 2 },
     "pack_version": {
       "type": "string",
       "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)$"
@@ -50,8 +50,8 @@
       "additionalProperties": { "$ref": "#/$defs/profile" },
       "propertyNames": {
         "enum": [
-          "source-ready-wordpress-plugin/1",
-          "source-ready-wordpress-theme/1"
+          "source-ready-wordpress-plugin/2",
+          "source-ready-wordpress-theme/2"
         ]
       }
     }

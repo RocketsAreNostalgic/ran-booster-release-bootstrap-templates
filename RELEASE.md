@@ -4,25 +4,41 @@
 2. Require `npm test` and review the rendered plugin and theme fixtures.
 3. Merge the Release Please pull request only after confirming `package.json`,
    `.release-please-manifest.json`, and release notes agree.
-4. Quality runs the deterministic two-build fixture proof and stores an exact,
-   hashed source-input archive for the matching commit. The privileged release
-   workflow runs only after that main-push Quality run succeeds and proves the
-   exact merged Release Please pull request and pending label.
-5. Consumer API 1 embeds GitHub's numeric release ID, which does not exist until
+4. Quality runs the complete test suite and stores an exact, hashed source-input
+   archive for its commit. The privileged release workflow runs only after a
+   same-repository main-push Quality run succeeds. Its candidate, archived
+   inputs, future tag, release target, and pack-manifest commit are that
+   successful merge SHA; the Release Please head is only exact pull-request and
+   identical-tree eligibility evidence.
+5. Consumer API 2 embeds GitHub's numeric release ID, which does not exist until
    the draft is created. After that gated draft mutation, the release workflow
    extracts the Quality-produced inputs, finalizes the release-ID-bound pack
    exactly once, uploads or byte-compares the ZIP, and downloads it for
    authoritative readback. This is the intentional exception to prebuilding the
    final release asset in Quality; removing the release ID would break Consumer
-   API 1.
+   API 2. An already-published or lost-acknowledgement rerun recovers the exact
+   release ID, rebuilds the candidate from the same Quality inputs, validates the
+   single asset metadata, downloads it, and compares bytes without uploading or
+   replacing anything.
 6. Enable GitHub immutable releases and set the repository variable
    `RAN_IMMUTABLE_RELEASES_ENABLED=true` before publication. Otherwise the
    verified release intentionally remains a draft.
 7. Never replace, delete, or retag a historical pack release. Publish a new
    patch release for a compatible template correction.
 
-Patch and minor stable releases may change template bodies while the manifest schema,
-logical IDs, placeholders, profiles, and consumer-owned capabilities remain
-compatible with Consumer API 1. Any new consumer capability requires a new
-consumer API and a corresponding Release Deployments release before the pack
-is eligible.
+Patch and minor stable releases may change template bodies while the manifest
+schema, logical IDs, placeholders, profiles, and consumer-owned capabilities
+remain compatible with Consumer API 2. Any new consumer capability requires a
+new consumer API and a corresponding Release Deployments release before the
+pack is eligible.
+
+## Consumer API 2 source-correction budget
+
+The reviewed baseline contained 1,598 non-test tooling, template, data, and
+workflow lines; 256 test and fixture lines; and a 403-line published template
+payload. This correction contains 1,940 non-test lines (+342), 879 test and
+fixture lines (+623), and a 543-line payload (+140). The growth is the bounded
+candidate selector, exact release/tag/asset state inspection, immutable
+published-rerun rebuild and byte readback, and the executable real-Git/fake-`gh`
+failure matrix. It adds no PHP, package dependency, logical ID, placeholder, or
+target path.
