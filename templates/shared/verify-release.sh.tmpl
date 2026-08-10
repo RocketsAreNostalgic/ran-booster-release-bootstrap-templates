@@ -11,20 +11,83 @@ slug='{{RAN_PACKAGE_SLUG}}'
 package_kind='{{RAN_PACKAGE_TYPE}}'
 header_file='{{RAN_HEADER_PATH}}'
 update_uri='{{RAN_UPDATE_URI}}'
-allowlist="$project_root/release-contents.txt"
 archive=${1:-}
 expected_version=${2:-}
+release_ref=${3:-}
 
 [[ -f "$archive" && ! -L "$archive" ]] || fail 'release ZIP is missing or symbolic.'
 [[ "$package_kind" == plugin || "$package_kind" == theme ]] || fail 'package kind is invalid.'
+[[ "$header_file" =~ ^[A-Za-z0-9._/-]+$ && "$header_file" != /* && "$header_file" != *'..'* ]] \
+	|| fail 'header path is invalid.'
 [[ "$expected_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
 	|| fail 'expected version is invalid.'
+[[ -n "$release_ref" ]] || fail 'expected an explicit release commit.'
+commit=$(git -C "$project_root" rev-parse --verify "$release_ref^{commit}") \
+	|| fail 'release ref does not resolve to a commit.'
+[[ "$commit" =~ ^[0-9a-f]{40}$ ]] || fail 'release commit is invalid.'
 unzip -tqq "$archive" >/dev/null || fail 'release ZIP is corrupt.'
+
+regular_blob_oid() {
+	local file=$1 record metadata listed mode type object extra
+	record=$(git -C "$project_root" ls-tree --full-tree "$commit" -- "$file") \
+		|| fail "could not inspect committed source: $file"
+	[[ -n "$record" && "$record" == *$'\t'* ]] \
+		|| fail "committed source is missing: $file"
+	metadata=${record%%$'\t'*}
+	listed=${record#*$'\t'}
+	read -r mode type object extra <<< "$metadata"
+	[[ "$listed" == "$file" && -z "${extra:-}" && "$type" == blob \
+		&& ( "$mode" == 100644 || "$mode" == 100755 ) \
+		&& "$object" =~ ^[0-9a-f]{40,64}$ ]] \
+		|| fail "committed source is not one regular blob: $file"
+	printf '%s\n' "$object"
+}
 
 actual=$(mktemp)
 expected=$(mktemp)
-temporary=$(mktemp -d)
+temporary=$(mktemp -d "${TMPDIR:-/tmp}/${slug}-verify.XXXXXX")
+allowlist="$temporary/release-contents.txt"
+projection="$temporary/projection.tsv"
 trap 'rm -f "$actual" "$expected"; rm -rf "$temporary"' EXIT HUP INT TERM
+: > "$projection"
+
+allowlist_oid=$(regular_blob_oid release-contents.txt)
+git -C "$project_root" cat-file blob "$allowlist_oid" > "$allowlist"
+[[ -s "$allowlist" ]] || fail 'release allowlist is empty.'
+
+declare -A declared=()
+declare -A projected=()
+while IFS= read -r entry || [[ -n "$entry" ]]; do
+	[[ -z "$entry" || "$entry" == \#* ]] && continue
+	[[ "$entry" =~ ^[A-Za-z0-9._/-]+$ && "$entry" != /* && "$entry" != *'..'* ]] \
+		|| fail "release allowlist entry is unsafe: $entry"
+	entry=${entry%/}
+	[[ -n "$entry" && -z "${declared[$entry]+x}" ]] \
+		|| fail "duplicate release allowlist entry: $entry"
+	declared[$entry]=1
+
+	found=0
+	while IFS= read -r -d '' record; do
+		metadata=${record%%$'\t'*}
+		path=${record#*$'\t'}
+		read -r mode type object extra <<< "$metadata"
+		[[ "$path" == "$entry" || "$path" == "$entry/"* ]] \
+			|| fail "committed source escaped its allowlist entry: $path"
+		[[ "$path" =~ ^[A-Za-z0-9._/-]+$ && "$path" != /* && "$path" != *'..'* ]] \
+			|| fail "committed source path is unsafe: $path"
+		[[ -z "${extra:-}" && "$type" == blob \
+			&& ( "$mode" == 100644 || "$mode" == 100755 ) \
+			&& "$object" =~ ^[0-9a-f]{40,64}$ ]] \
+			|| fail "committed source is not a regular blob: $path"
+		[[ -z "${projected[$path]+x}" ]] \
+			|| fail "release allowlist projects a duplicate path: $path"
+		projected[$path]=1
+		printf '%s\t%s\n' "$path" "$object" >> "$projection"
+		found=$((found + 1))
+	done < <(git -C "$project_root" ls-tree -r -z --full-tree "$commit" -- "$entry")
+	[[ "$found" -gt 0 ]] || fail "release allowlist entry is missing or empty: $entry"
+done < "$allowlist"
+[[ ${#declared[@]} -gt 0 && ${#projected[@]} -gt 0 ]] || fail 'release allowlist is empty.'
 
 unzip -Z1 "$archive" | sed '/\/$/d' | LC_ALL=C sort -u > "$actual"
 grep -Ev "^${slug}/" "$actual" >/dev/null \
@@ -33,22 +96,22 @@ if zipinfo -l "$archive" | awk '$1 ~ /^l/ { found = 1 } END { exit !found }'; th
 	fail 'release ZIP contains symbolic links.'
 fi
 
-while IFS= read -r entry || [[ -n "$entry" ]]; do
-	[[ -z "$entry" || "$entry" == \#* ]] && continue
-	find "$project_root/$entry" -type f -print | sed "s#^$project_root/#$slug/#"
-done < "$allowlist" | LC_ALL=C sort -u > "$expected"
-diff -u "$expected" "$actual" || fail 'release ZIP differs from the runtime allowlist.'
+while IFS=$'\t' read -r file object; do
+	printf '%s/%s\n' "$slug" "$file"
+done < <(LC_ALL=C sort -t $'\t' -k1,1 "$projection") \
+	| LC_ALL=C sort -u > "$expected"
+diff -u "$expected" "$actual" || fail 'release ZIP differs from the committed runtime allowlist.'
 
-unzip -q "$archive" -d "$temporary"
-while IFS= read -r file; do
-	relative=${file#"$slug/"}
-	cmp -s "$project_root/$relative" "$temporary/$file" \
-		|| fail "release file differs from reviewed source: $relative"
-done < "$actual"
+unzip -q "$archive" -d "$temporary/extracted"
+while IFS=$'\t' read -r file object; do
+	git -C "$project_root" cat-file blob "$object" \
+		| cmp -s - "$temporary/extracted/$slug/$file" \
+		|| fail "release file differs from the release commit: $file"
+done < <(LC_ALL=C sort -t $'\t' -k1,1 "$projection")
 
-header="$temporary/$slug/$header_file"
+header="$temporary/extracted/$slug/$header_file"
 [[ -f "$header" ]] || fail 'WordPress header file is absent from the release.'
-header_version=$(sed -nE 's/^[[:space:]]*(\*|)[[:space:]]*Version:[[:space:]]*([^[:space:]]+).*/\2/p' "$header")
+header_version=$(sed -nE 's/^[[:space:]]*(\*)?[[:space:]]*Version:[[:space:]]*([^[:space:]]+).*/\2/p' "$header")
 [[ "$header_version" == "$expected_version" ]] \
 	|| fail 'archived WordPress header version is incorrect.'
 if [[ "$package_kind" == plugin ]]; then
@@ -60,6 +123,14 @@ else
 fi
 grep -Fq "Update URI: $update_uri" "$header" \
 	|| fail 'canonical Update URI is missing.'
+
+version_oid=$(regular_blob_oid version.txt)
+manifest_oid=$(regular_blob_oid .release-please-manifest.json)
+version_source=$(git -C "$project_root" cat-file blob "$version_oid" | tr -d '[:space:]')
+manifest_version=$(git -C "$project_root" cat-file blob "$manifest_oid" \
+	| node -e 'let input=""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => process.stdout.write(JSON.parse(input)["."] || ""));')
+[[ "$version_source" == "$expected_version" && "$manifest_version" == "$expected_version" ]] \
+	|| fail 'release commit version sources do not agree.'
 
 archive_size=$(wc -c < "$archive" | tr -d '[:space:]')
 archive_sha256=$(shasum -a 256 "$archive" | awk '{ print $1 }')

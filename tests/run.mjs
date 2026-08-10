@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import {
   chmod,
+  cp,
   mkdtemp,
   mkdir,
   readFile,
@@ -28,7 +29,6 @@ const identity = {
   repositoryId: "987654321",
   releaseId: "41",
   tag: `v${version}`,
-  commit: "0123456789abcdef0123456789abcdef01234567",
 };
 
 try {
@@ -103,9 +103,14 @@ async function assertRepositoryWorkflows() {
   assert.match(releaseCandidate, /base\?\.sha === baseCommit/);
   assert.match(release, /test "\$pending" = true/);
   assert.equal(
-    (release.match(/bash "\$source\/scripts\/build-pack\.sh"/g) ?? []).length,
+    (release.match(/bash scripts\/build-pack\.sh/g) ?? []).length,
     1,
   );
+  assert.match(
+    release,
+    /git archive --format=tar --output="\$expected" "\$PACK_COMMIT"/,
+  );
+  assert.match(release, /cmp -s "\$inputs" "\$expected"/);
   assert.doesNotMatch(release, /^\s+publish-pack:/m);
 }
 
@@ -654,7 +659,202 @@ async function renderFixtures(profiles) {
         execFileSync("bash", ["-n", destination], { stdio: "pipe" });
       if (destination.endsWith(".yml")) validateManagedWorkflow(rendered);
     }
+    await assertRenderedCommitArchive(fixtureRoot, values);
   }
+}
+
+async function assertRenderedCommitArchive(renderedRoot, values) {
+  const fixture = path.join(
+    temporary,
+    `rendered-commit-${values.PACKAGE_TYPE}`,
+  );
+  const scripts = path.join(fixture, "scripts");
+  const source = path.join(fixture, "src");
+  const cleanOutput = path.join(fixture, "clean-output");
+  const dirtyOutput = path.join(fixture, "dirty-output");
+  const changedOutput = path.join(fixture, "changed-output");
+  const releaseVersion = "1.2.3";
+  await mkdir(scripts, { recursive: true });
+  await mkdir(source, { recursive: true });
+  await cp(
+    path.join(renderedRoot, "build-release.sh"),
+    path.join(scripts, "build-release.sh"),
+  );
+  await cp(
+    path.join(renderedRoot, "verify-release.sh"),
+    path.join(scripts, "verify-release.sh"),
+  );
+  await chmod(path.join(scripts, "build-release.sh"), 0o755);
+  await chmod(path.join(scripts, "verify-release.sh"), 0o755);
+  await writeFile(
+    path.join(fixture, ".release-please-manifest.json"),
+    `${JSON.stringify({ ".": releaseVersion })}\n`,
+  );
+  await writeFile(path.join(fixture, "version.txt"), `${releaseVersion}\n`);
+  await writeFile(
+    path.join(fixture, "release-contents.txt"),
+    `src/\n${values.HEADER_PATH}\nREADME.md\n`,
+  );
+  await writeFile(path.join(fixture, "README.md"), "Fixture package.\n");
+  await writeFile(
+    path.join(source, "Runtime.php"),
+    "<?php\n// committed runtime\n",
+  );
+  const header =
+    values.PACKAGE_TYPE === "plugin"
+      ? `<?php\n/**\n * Plugin Name: Fixture package\n * Version: ${releaseVersion}\n * Update URI: ${values.UPDATE_URI}\n */\n`
+      : `/*\nTheme Name: Fixture package\nVersion: ${releaseVersion}\nUpdate URI: ${values.UPDATE_URI}\n*/\n`;
+  await writeFile(path.join(fixture, values.HEADER_PATH), header);
+
+  git(fixture, "init", "-b", "main");
+  git(fixture, "config", "user.email", "fixture@example.test");
+  git(fixture, "config", "user.name", "Fixture");
+  git(fixture, "add", ".");
+  git(fixture, "commit", "-m", "chore: exact source fixture");
+  const commit = git(fixture, "rev-parse", "HEAD");
+  const build = path.join(scripts, "build-release.sh");
+  const verify = path.join(scripts, "verify-release.sh");
+
+  runBashWithUmask(
+    build,
+    [commit, releaseVersion, cleanOutput],
+    fixture,
+    "022",
+  );
+  const archiveName = `${values.PACKAGE_SLUG}-${releaseVersion}.zip`;
+  const cleanArchive = path.join(cleanOutput, archiveName);
+  const cleanBytes = await readFile(cleanArchive);
+
+  await writeFile(path.join(fixture, "release-contents.txt"), "../unsafe\n");
+  await writeFile(
+    path.join(fixture, values.HEADER_PATH),
+    header.replace(releaseVersion, "9.9.9"),
+  );
+  await writeFile(path.join(fixture, "version.txt"), "9.9.9\n");
+  await writeFile(
+    path.join(source, "Runtime.php"),
+    "<?php\n// dirty runtime\n",
+  );
+  await writeFile(path.join(source, "untracked.php"), "<?php\n// untracked\n");
+  runBashWithUmask(
+    build,
+    [commit, releaseVersion, dirtyOutput],
+    fixture,
+    "077",
+  );
+  const dirtyArchive = path.join(dirtyOutput, archiveName);
+  assert.ok(
+    cleanBytes.equals(await readFile(dirtyArchive)),
+    `${values.PACKAGE_TYPE} archive changed under dirty tracked or untracked files.`,
+  );
+  execFileSync("bash", [verify, cleanArchive, releaseVersion, commit], {
+    cwd: fixture,
+    stdio: "pipe",
+  });
+  assert.notEqual(
+    spawnSync("bash", [build, "", releaseVersion, dirtyOutput], {
+      cwd: fixture,
+      encoding: "utf8",
+    }).status,
+    0,
+    "Rendered builder accepted an omitted release commit.",
+  );
+
+  git(fixture, "restore", ".");
+  await rm(path.join(source, "untracked.php"));
+  await writeFile(
+    path.join(source, "Runtime.php"),
+    "<?php\n// next committed runtime\n",
+  );
+  git(fixture, "add", "src/Runtime.php");
+  git(fixture, "commit", "-m", "fix: change committed runtime");
+  const changedCommit = git(fixture, "rev-parse", "HEAD");
+  execFileSync("bash", [build, changedCommit, releaseVersion, changedOutput], {
+    cwd: fixture,
+    stdio: "pipe",
+  });
+  assert.equal(
+    cleanBytes.equals(await readFile(path.join(changedOutput, archiveName))),
+    false,
+    `${values.PACKAGE_TYPE} archive ignored changed committed bytes.`,
+  );
+  assert.notEqual(
+    spawnSync("bash", [verify, cleanArchive, releaseVersion, changedCommit], {
+      cwd: fixture,
+      encoding: "utf8",
+    }).status,
+    0,
+    "Rendered verifier accepted an archive from a different commit.",
+  );
+
+  await assertRejectedCommittedProjection(fixture, build, releaseVersion, {
+    label: "missing allowlist entry",
+    allowlist: "missing-file.php\n",
+  });
+  await assertRejectedCommittedProjection(fixture, build, releaseVersion, {
+    label: "unsafe allowlist entry",
+    allowlist: "../unsafe\n",
+  });
+  await assertRejectedCommittedProjection(fixture, build, releaseVersion, {
+    label: "duplicate allowlist entry",
+    allowlist: "src/\nsrc\n",
+  });
+  await assertRejectedCommittedProjection(fixture, build, releaseVersion, {
+    label: "overlapping projection",
+    allowlist: "src/\nsrc/Runtime.php\n",
+  });
+  const symlink = path.join(fixture, "linked-runtime.php");
+  await writeFile(path.join(fixture, "link-target.php"), "<?php\n");
+  execFileSync("ln", ["-s", "link-target.php", symlink]);
+  await assertRejectedCommittedProjection(fixture, build, releaseVersion, {
+    label: "symbolic source",
+    allowlist: "linked-runtime.php\n",
+    add: ["linked-runtime.php", "link-target.php"],
+  });
+
+  git(fixture, "rm", "-f", "linked-runtime.php", "link-target.php");
+  git(fixture, "commit", "-m", "test: remove symbolic source fixture");
+  const gitlinkTarget = git(fixture, "rev-parse", "HEAD");
+  git(
+    fixture,
+    "update-index",
+    "--add",
+    "--cacheinfo",
+    `160000,${gitlinkTarget},linked-module`,
+  );
+  await writeFile(
+    path.join(fixture, "release-contents.txt"),
+    "linked-module\n",
+  );
+  git(fixture, "add", "release-contents.txt");
+  git(fixture, "commit", "-m", "test: committed gitlink fixture");
+  const gitlinkCommit = git(fixture, "rev-parse", "HEAD");
+  assert.notEqual(
+    spawnSync("bash", [build, gitlinkCommit, releaseVersion, changedOutput], {
+      cwd: fixture,
+      encoding: "utf8",
+    }).status,
+    0,
+    "Rendered builder accepted a committed gitlink.",
+  );
+}
+
+async function assertRejectedCommittedProjection(
+  fixture,
+  build,
+  releaseVersion,
+  { label, allowlist, add = [] },
+) {
+  await writeFile(path.join(fixture, "release-contents.txt"), allowlist);
+  git(fixture, "add", "release-contents.txt", ...add);
+  git(fixture, "commit", "-m", `test: ${label}`);
+  const commit = git(fixture, "rev-parse", "HEAD");
+  const result = spawnSync(
+    "bash",
+    [build, commit, releaseVersion, path.join(fixture, `rejected-${commit}`)],
+    { cwd: fixture, encoding: "utf8" },
+  );
+  assert.notEqual(result.status, 0, `Rendered builder accepted ${label}.`);
 }
 
 function fixtureName(logicalId) {
@@ -695,6 +895,26 @@ function validateManagedWorkflow(workflow) {
 }
 
 async function assertDeterministicPack() {
+  const sourceFixture = path.join(temporary, "pack-source");
+  await mkdir(sourceFixture);
+  for (const entry of [
+    "package.json",
+    "profiles",
+    "schema",
+    "scripts",
+    "src",
+    "templates",
+  ]) {
+    await cp(path.join(root, entry), path.join(sourceFixture, entry), {
+      recursive: true,
+    });
+  }
+  git(sourceFixture, "init", "-b", "main");
+  git(sourceFixture, "config", "user.email", "fixture@example.test");
+  git(sourceFixture, "config", "user.name", "Fixture");
+  git(sourceFixture, "add", ".");
+  git(sourceFixture, "commit", "-m", "chore: exact pack source");
+  const commit = git(sourceFixture, "rev-parse", "HEAD");
   const first = path.join(temporary, "first");
   const second = path.join(temporary, "second");
   await mkdir(first);
@@ -703,17 +923,39 @@ async function assertDeterministicPack() {
     identity.repositoryId,
     identity.releaseId,
     identity.tag,
-    identity.commit,
+    commit,
   ];
-  execFileSync(
-    "bash",
-    [path.join(root, "scripts/build-pack.sh"), first, ...arguments_],
-    { cwd: root, stdio: "pipe" },
+  runBashWithUmask(
+    path.join(sourceFixture, "scripts/build-pack.sh"),
+    [first, ...arguments_],
+    sourceFixture,
+    "022",
   );
-  execFileSync(
-    "bash",
-    [path.join(root, "scripts/build-pack.sh"), second, ...arguments_],
-    { cwd: root, stdio: "pipe" },
+  await writeFile(
+    path.join(sourceFixture, "package.json"),
+    `${JSON.stringify({ name: "dirty", version: "9.9.9" })}\n`,
+  );
+  await writeFile(
+    path.join(sourceFixture, "templates/shared/build-release.sh.tmpl"),
+    "dirty template\n",
+  );
+  await writeFile(
+    path.join(sourceFixture, "src/template-pack.source.json"),
+    "{}\n",
+  );
+  await writeFile(
+    path.join(sourceFixture, "profiles/source-ready-wordpress-plugin-2.json"),
+    "{}\n",
+  );
+  await writeFile(
+    path.join(sourceFixture, "templates/shared/untracked-looking.tmpl"),
+    "untracked template\n",
+  );
+  runBashWithUmask(
+    path.join(sourceFixture, "scripts/build-pack.sh"),
+    [second, ...arguments_],
+    sourceFixture,
+    "077",
   );
   const archiveName = "ran-booster-release-bootstrap-templates.zip";
   const one = await readFile(path.join(first, archiveName));
@@ -725,11 +967,28 @@ async function assertDeterministicPack() {
   execFileSync(
     "bash",
     [
-      path.join(root, "scripts/verify-pack.sh"),
+      path.join(sourceFixture, "scripts/verify-pack.sh"),
       path.join(first, archiveName),
       ...arguments_,
     ],
-    { cwd: root, stdio: "pipe" },
+    { cwd: sourceFixture, stdio: "pipe" },
+  );
+  const missing = spawnSync(
+    "bash",
+    [
+      path.join(sourceFixture, "scripts/build-pack.sh"),
+      path.join(temporary, "missing-pack"),
+      identity.repositoryId,
+      identity.releaseId,
+      identity.tag,
+      "f".repeat(40),
+    ],
+    { cwd: sourceFixture, encoding: "utf8" },
+  );
+  assert.notEqual(
+    missing.status,
+    0,
+    "Pack builder accepted an unavailable commit.",
   );
 
   const members = execFileSync(
@@ -745,6 +1004,79 @@ async function assertDeterministicPack() {
     false,
   );
   assert.equal(members.includes("release-contents.txt"), false);
+
+  git(sourceFixture, "restore", ".");
+  await rm(path.join(sourceFixture, "templates/shared/untracked-looking.tmpl"));
+  await writeFile(
+    path.join(sourceFixture, "templates/shared/build-release.sh.tmpl"),
+    `${await readFile(
+      path.join(sourceFixture, "templates/shared/build-release.sh.tmpl"),
+      "utf8",
+    )}\n# next committed template bytes\n`,
+  );
+  git(sourceFixture, "add", "templates/shared/build-release.sh.tmpl");
+  git(sourceFixture, "commit", "-m", "fix: change committed pack input");
+  const changedCommit = git(sourceFixture, "rev-parse", "HEAD");
+  const changedArguments = [
+    identity.repositoryId,
+    identity.releaseId,
+    identity.tag,
+    changedCommit,
+  ];
+  const changedOutput = path.join(temporary, "changed-pack");
+  execFileSync(
+    "bash",
+    [
+      path.join(sourceFixture, "scripts/build-pack.sh"),
+      changedOutput,
+      ...changedArguments,
+    ],
+    { cwd: sourceFixture, stdio: "pipe" },
+  );
+  assert.equal(
+    one.equals(await readFile(path.join(changedOutput, archiveName))),
+    false,
+    "Pack archive ignored changed committed template bytes.",
+  );
+  assert.notEqual(
+    spawnSync(
+      "bash",
+      [
+        path.join(sourceFixture, "scripts/verify-pack.sh"),
+        path.join(first, archiveName),
+        ...changedArguments,
+      ],
+      { cwd: sourceFixture, encoding: "utf8" },
+    ).status,
+    0,
+    "Pack verifier accepted an archive from a different commit.",
+  );
+
+  await rm(path.join(sourceFixture, "scripts/contract.mjs"));
+  await mkdir(path.join(sourceFixture, "scripts/contract.mjs"));
+  await writeFile(
+    path.join(sourceFixture, "scripts/contract.mjs/nested.mjs"),
+    "export default {};\n",
+  );
+  git(sourceFixture, "add", "-A");
+  git(sourceFixture, "commit", "-m", "test: required pack input as tree");
+  const nonBlobCommit = git(sourceFixture, "rev-parse", "HEAD");
+  assert.notEqual(
+    spawnSync(
+      "bash",
+      [
+        path.join(sourceFixture, "scripts/build-pack.sh"),
+        path.join(temporary, "non-blob-pack"),
+        identity.repositoryId,
+        identity.releaseId,
+        identity.tag,
+        nonBlobCommit,
+      ],
+      { cwd: sourceFixture, encoding: "utf8" },
+    ).status,
+    0,
+    "Pack builder accepted a required control path as a tree.",
+  );
 }
 
 async function assertTamperFails() {
@@ -778,4 +1110,20 @@ async function assertTamperFails() {
     "A modified template passed digest verification.",
   );
   assert.match(result.stderr, /digest mismatch|size mismatch/i);
+}
+
+function runBashWithUmask(script, arguments_, cwd, mask) {
+  execFileSync(
+    "bash",
+    [
+      "-c",
+      'umask "$1"; shift; exec "$@"',
+      "exact-commit-fixture",
+      mask,
+      "bash",
+      script,
+      ...arguments_,
+    ],
+    { cwd, stdio: "pipe" },
+  );
 }

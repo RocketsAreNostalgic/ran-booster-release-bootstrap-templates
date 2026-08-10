@@ -10,8 +10,7 @@ project_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 slug='{{RAN_PACKAGE_SLUG}}'
 package_type='{{RAN_PACKAGE_TYPE}}'
 header_file='{{RAN_HEADER_PATH}}'
-allowlist="$project_root/release-contents.txt"
-ref=${1:-HEAD}
+release_ref=${1:-}
 expected_version=${2:-}
 output_dir=${3:-"$project_root/.ran-booster-release-dist"}
 
@@ -19,54 +18,107 @@ output_dir=${3:-"$project_root/.ran-booster-release-dist"}
 [[ "$package_type" == plugin || "$package_type" == theme ]] || fail 'package type is invalid.'
 [[ "$header_file" =~ ^[A-Za-z0-9._/-]+$ && "$header_file" != /* && "$header_file" != *'..'* ]] \
 	|| fail 'header path is invalid.'
+[[ -n "$release_ref" ]] || fail 'expected an explicit release commit.'
 [[ "$expected_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
 	|| fail 'expected version must be an exact release version.'
-[[ -f "$allowlist" && ! -L "$allowlist" ]] || fail 'release allowlist is invalid.'
 
-commit=$(git -C "$project_root" rev-parse --verify "$ref^{commit}") \
+commit=$(git -C "$project_root" rev-parse --verify "$release_ref^{commit}") \
 	|| fail 'release ref does not resolve to a commit.'
 [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || fail 'release commit is invalid.'
-[[ "$(git -C "$project_root" rev-parse HEAD)" == "$commit" ]] \
-	|| fail 'working tree is not checked out at the release commit.'
 
-header_version=$(sed -nE 's/^[[:space:]]*(\*|)[[:space:]]*Version:[[:space:]]*([^[:space:]]+).*/\2/p' "$project_root/$header_file")
-version_source=$(tr -d '[:space:]' < "$project_root/version.txt")
-manifest_version=$(node -e 'const f=require(process.argv[1]); process.stdout.write(f["."] || "")' "$project_root/.release-please-manifest.json")
+regular_blob_oid() {
+	local file=$1 record metadata listed mode type object extra
+	record=$(git -C "$project_root" ls-tree --full-tree "$commit" -- "$file") \
+		|| fail "could not inspect committed source: $file"
+	[[ -n "$record" && "$record" == *$'\t'* ]] \
+		|| fail "committed source is missing: $file"
+	metadata=${record%%$'\t'*}
+	listed=${record#*$'\t'}
+	read -r mode type object extra <<< "$metadata"
+	[[ "$listed" == "$file" && -z "${extra:-}" && "$type" == blob \
+		&& ( "$mode" == 100644 || "$mode" == 100755 ) \
+		&& "$object" =~ ^[0-9a-f]{40,64}$ ]] \
+		|| fail "committed source is not one regular blob: $file"
+	printf '%s\n' "$object"
+}
+
+temporary=$(mktemp -d "${TMPDIR:-/tmp}/${slug}-release.XXXXXX")
+trap 'rm -rf "$temporary"' EXIT HUP INT TERM
+stage_root="$temporary/stage/$slug"
+allowlist="$temporary/release-contents.txt"
+projection="$temporary/projection.tsv"
+mkdir -p "$stage_root" "$output_dir"
+: > "$projection"
+
+allowlist_oid=$(regular_blob_oid release-contents.txt)
+git -C "$project_root" cat-file blob "$allowlist_oid" > "$allowlist"
+[[ -s "$allowlist" ]] || fail 'release allowlist is empty.'
+
+declare -A declared=()
+declare -A projected=()
+while IFS= read -r entry || [[ -n "$entry" ]]; do
+	[[ -z "$entry" || "$entry" == \#* ]] && continue
+	[[ "$entry" =~ ^[A-Za-z0-9._/-]+$ && "$entry" != /* && "$entry" != *'..'* ]] \
+		|| fail "release allowlist entry is unsafe: $entry"
+	entry=${entry%/}
+	[[ -n "$entry" && -z "${declared[$entry]+x}" ]] \
+		|| fail "duplicate release allowlist entry: $entry"
+	declared[$entry]=1
+
+	found=0
+	while IFS= read -r -d '' record; do
+		metadata=${record%%$'\t'*}
+		path=${record#*$'\t'}
+		read -r mode type object extra <<< "$metadata"
+		[[ "$path" == "$entry" || "$path" == "$entry/"* ]] \
+			|| fail "committed source escaped its allowlist entry: $path"
+		[[ "$path" =~ ^[A-Za-z0-9._/-]+$ && "$path" != /* && "$path" != *'..'* ]] \
+			|| fail "committed source path is unsafe: $path"
+		[[ -z "${extra:-}" && "$type" == blob \
+			&& ( "$mode" == 100644 || "$mode" == 100755 ) \
+			&& "$object" =~ ^[0-9a-f]{40,64}$ ]] \
+			|| fail "committed source is not a regular blob: $path"
+		[[ -z "${projected[$path]+x}" ]] \
+			|| fail "release allowlist projects a duplicate path: $path"
+		projected[$path]=1
+		printf '%s\t%s\n' "$path" "$object" >> "$projection"
+		found=$((found + 1))
+	done < <(git -C "$project_root" ls-tree -r -z --full-tree "$commit" -- "$entry")
+	[[ "$found" -gt 0 ]] || fail "release allowlist entry is missing or empty: $entry"
+done < "$allowlist"
+[[ ${#declared[@]} -gt 0 && ${#projected[@]} -gt 0 ]] || fail 'release allowlist is empty.'
+
+header_oid=$(regular_blob_oid "$header_file")
+version_oid=$(regular_blob_oid version.txt)
+manifest_oid=$(regular_blob_oid .release-please-manifest.json)
+[[ -n "${projected[$header_file]+x}" ]] \
+	|| fail 'WordPress header is absent from the committed allowlist.'
+header_version=$(git -C "$project_root" cat-file blob "$header_oid" \
+	| sed -nE 's/^[[:space:]]*(\*)?[[:space:]]*Version:[[:space:]]*([^[:space:]]+).*/\2/p')
+version_source=$(git -C "$project_root" cat-file blob "$version_oid" | tr -d '[:space:]')
+manifest_version=$(git -C "$project_root" cat-file blob "$manifest_oid" \
+	| node -e 'let input=""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => process.stdout.write(JSON.parse(input)["."] || ""));')
 [[ "$header_version" == "$expected_version" ]] \
 	|| fail 'WordPress header version does not match the expected version.'
 [[ "$version_source" == "$expected_version" && "$manifest_version" == "$expected_version" ]] \
 	|| fail 'Release Please version sources do not agree.'
 
-temporary=$(mktemp -d "${TMPDIR:-/tmp}/${slug}-release.XXXXXX")
-trap 'rm -rf "$temporary"' EXIT HUP INT TERM
-stage_root="$temporary/$slug"
-mkdir -p "$stage_root" "$output_dir"
+while IFS=$'\t' read -r file object; do
+	destination="$stage_root/$file"
+	mkdir -p "$(dirname -- "$destination")"
+	git -C "$project_root" cat-file blob "$object" > "$destination"
+done < <(LC_ALL=C sort -t $'\t' -k1,1 "$projection")
 
-declare -A seen=()
-while IFS= read -r entry || [[ -n "$entry" ]]; do
-	[[ -z "$entry" || "$entry" == \#* ]] && continue
-	[[ "$entry" =~ ^[A-Za-z0-9._/-]+$ && "$entry" != /* && "$entry" != *'..'* ]] \
-		|| fail "release allowlist entry is unsafe: $entry"
-	[[ -z "${seen[$entry]+x}" ]] || fail "duplicate release allowlist entry: $entry"
-	seen[$entry]=1
-	source="$project_root/$entry"
-	[[ -e "$source" && ! -L "$source" ]] || fail "release allowlist entry is missing or symbolic: $entry"
-	if find "$source" -type l -print -quit | grep -q .; then
-		fail "release allowlist entry contains a symbolic link: $entry"
-	fi
-	mkdir -p "$(dirname -- "$stage_root/$entry")"
-	cp -R "$source" "$stage_root/$entry"
-done < "$allowlist"
-[[ ${#seen[@]} -gt 0 ]] || fail 'release allowlist is empty.'
-
-find "$temporary" -exec touch -h -t 198001010000 {} +
+find "$temporary/stage" -type d -exec chmod 0755 {} +
+find "$temporary/stage" -type f -exec chmod 0644 {} +
+find "$temporary/stage" -exec touch -h -t 198001010000 {} +
 output_dir=$(CDPATH='' cd -- "$output_dir" && pwd)
 archive="$output_dir/$slug-$expected_version.zip"
 rm -f "$archive"
 (
-	cd "$temporary"
+	cd "$temporary/stage"
 	find "$slug" -print | LC_ALL=C sort | zip -Xq "$archive" -@
 )
 
-bash "$project_root/scripts/verify-release.sh" "$archive" "$expected_version"
+bash "$project_root/scripts/verify-release.sh" "$archive" "$expected_version" "$commit"
 printf '%s\n' "$archive"

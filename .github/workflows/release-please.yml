@@ -149,6 +149,9 @@ jobs:
             echo '::error::The tested pack inputs contain an unsafe path.'
             exit 1
           fi
+          expected="$RUNNER_TEMP/ran-booster-release-bootstrap-templates-inputs.tar"
+          git archive --format=tar --output="$expected" "$PACK_COMMIT" -- package.json profiles schema scripts src templates
+          cmp -s "$inputs" "$expected"
 
       - name: Create or reuse one empty draft
         if: steps.release-state.outputs.release-required == 'true' && env.PACK_PENDING == 'true'
@@ -170,12 +173,10 @@ jobs:
           PACK_REPOSITORY_ID: ${{ github.event.repository.id }}
         run: |
           set -euo pipefail
-          source="$RUNNER_TEMP/ran-booster-template-pack-source"
           output="$GITHUB_WORKSPACE/.ran-booster-template-pack-dist"
-          install -d "$source" "$output"
-          tar -xf dist/ran-booster-release-bootstrap-templates-inputs.tar -C "$source"
-          test "$(node -p "require('${source}/package.json').version")" = "$PACK_VERSION"
-          bash "$source/scripts/build-pack.sh" \
+          install -d "$output"
+          test "$(git show "${PACK_COMMIT}:package.json" | node -e 'let input=""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => process.stdout.write(JSON.parse(input).version || ""));')" = "$PACK_VERSION"
+          bash scripts/build-pack.sh \
             "$output" \
             "$PACK_REPOSITORY_ID" \
             "$PACK_RELEASE_ID" \
