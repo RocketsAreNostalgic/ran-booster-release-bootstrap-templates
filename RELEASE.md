@@ -27,6 +27,26 @@
 7. Never replace, delete, or retag a historical pack release. Publish a new
    patch release for a compatible template correction.
 
+## Prepublication evidence boundary
+
+There is deliberately no final release ZIP before the draft exists. Consumer
+API 2 requires the positive GitHub release ID inside `template-pack.json`, so
+the exact publication sequence is successful Release Please merge and Quality
+run, empty draft creation or recovery, release-ID-bound build and verification,
+single upload, immutable publication, then downloaded-byte readback. A local
+build with a synthetic release ID proves only the builder, manifest, profiles,
+rendered plugin/theme fixtures and hostile verifiers.
+
+The reviewed local fixture at commit `75c003a`, repository ID `1322743261` and
+synthetic release ID `9007199254740991` built twice byte-identically at 13,418
+bytes with SHA-256
+`39cf06cd9988978442803d59c5222781651ee6f3c2cf2cc53afc4482084eea00`.
+Both independent pack verifications and the full `npm test` plugin/theme matrix
+passed, then the disposable ZIPs were removed. This is not a retained release
+candidate: source still declares `0.2.0`, while immutable historical `v0.2.0`
+is API 1 and cannot be replaced. The publication workflow must qualify the
+future release merge and build the final bytes with its actual draft ID.
+
 Patch and minor stable releases may change template bodies while the manifest
 schema, logical IDs, placeholders, profiles, and consumer-owned capabilities
 remain compatible with Consumer API 2. Any new consumer capability requires a

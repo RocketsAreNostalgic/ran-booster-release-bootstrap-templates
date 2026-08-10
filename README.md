@@ -44,6 +44,15 @@ archived payload byte are projected from that commit; dirty tracked or
 untracked checkout files are not artifact authority. Their verifiers
 independently compare the archive with the same committed projection.
 
+A locally supplied release ID produces a deterministic contract fixture only.
+It is not candidate or publication evidence: Consumer API 2 embeds the real
+GitHub release ID, which does not exist until the separately authorised release
+workflow creates or recovers its exact draft. That workflow then builds the
+final ZIP from the successful Quality commit and actual release tuple before
+upload and immutable readback. In particular, current source version `0.2.0`
+must never be confused with or substituted for the historical immutable API 1
+release at `v0.2.0`.
+
 Before extraction, both verifiers parse the ZIP central directory and local
 records, reject unsafe or ambiguous paths and member types, enforce fixed
 archive, member, expanded-size, and compression-ratio limits, and validate each
