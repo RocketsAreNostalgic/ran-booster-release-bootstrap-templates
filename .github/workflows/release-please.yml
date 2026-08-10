@@ -65,22 +65,8 @@ jobs:
               and .run_attempt == $run_attempt' \
             <<< "$evidence" >/dev/null
 
-          checkout="$RAN_QUALITY_COMMIT"
-          recovery=false
-          if [[ "$RAN_QUALITY_RUN_ID" == 31417475890 ]]; then
-            test "$RAN_QUALITY_RUN_ATTEMPT" = 2
-            test "$RAN_QUALITY_COMMIT" = 4b4a340d238eada8e73f12745e3f929788cb8942
-            test "$GITHUB_REF" = refs/heads/main
-            test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')" = "$GITHUB_SHA"
-            checkout="$GITHUB_SHA"
-            recovery=true
-            printf 'RAN_RELEASE_CONTROL_COMMIT=%s\n' "$GITHUB_SHA" >> "$GITHUB_ENV"
-            printf 'RAN_RELEASE_RECOVERY=%s\n' '31417475890:2' >> "$GITHUB_ENV"
-          fi
           {
-            printf 'checkout=%s\n' "$checkout"
             printf 'commit=%s\n' "$RAN_QUALITY_COMMIT"
-            printf 'recovery=%s\n' "$recovery"
             printf 'run_attempt=%s\n' "$RAN_QUALITY_RUN_ATTEMPT"
             printf 'run_id=%s\n' "$RAN_QUALITY_RUN_ID"
           } >> "$GITHUB_OUTPUT"
@@ -90,7 +76,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ steps.quality.outputs.checkout }}
+          ref: ${{ steps.quality.outputs.commit }}
 
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -104,8 +90,7 @@ jobs:
           RAN_QUALITY_COMMIT: ${{ steps.quality.outputs.commit }}
         run: |
           set -euo pipefail
-          expected_checkout="${RAN_RELEASE_CONTROL_COMMIT:-$RAN_QUALITY_COMMIT}"
-          test "$(git rev-parse HEAD)" = "$expected_checkout"
+          test "$(git rev-parse HEAD)" = "$RAN_QUALITY_COMMIT"
 
           if git diff --quiet "${RAN_QUALITY_COMMIT}^1" "$RAN_QUALITY_COMMIT" -- .release-please-manifest.json; then
             echo 'release-required=false' >> "$GITHUB_OUTPUT"
@@ -136,8 +121,7 @@ jobs:
           if [[ "$release_pending" == true ]]; then
             test "$pending" = true
             test "$tagged" = false
-            expected_main="${RAN_RELEASE_CONTROL_COMMIT:-$RAN_QUALITY_COMMIT}"
-            test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')" = "$expected_main"
+            test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')" = "$RAN_QUALITY_COMMIT"
           elif [[ "$pending" != true && "$tagged" != true ]]; then
             echo '::error::The published release PR has neither the pending nor tagged Release Please label.'
             exit 1
@@ -156,7 +140,6 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Open or update the release pull request
-        if: steps.quality.outputs.recovery != 'true'
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -218,7 +201,7 @@ jobs:
           if [[ "$PACK_STATE" == absent ]]; then
             gh release create "$PACK_TAG" --draft --target "$PACK_COMMIT" --title "$PACK_TAG" --generate-notes
           fi
-          release_decision="$(bash scripts/upload-pack.sh inspect "$PACK_TAG" "$PACK_COMMIT" false)"
+          release_decision="$(bash scripts/upload-pack.sh inspect-created "$PACK_TAG" "$PACK_COMMIT" false)"
           test "$(jq -er '.state' <<< "$release_decision")" = draft
           release_id="$(jq -er '.release_id' <<< "$release_decision")"
           printf 'PACK_RELEASE_ID=%s\n' "$release_id" >> "$GITHUB_ENV"
@@ -264,8 +247,7 @@ jobs:
             echo '::error::Enable GitHub immutable releases and set RAN_IMMUTABLE_RELEASES_ENABLED=true. The verified pack remains a draft.'
             exit 1
           fi
-          expected_main="${RAN_RELEASE_CONTROL_COMMIT:-$PACK_COMMIT}"
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')" = "$expected_main"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')" = "$PACK_COMMIT"
           gh release edit "$PACK_TAG" --draft=false --latest
           immutable=false
           for delay in 0 2 2 2 2; do

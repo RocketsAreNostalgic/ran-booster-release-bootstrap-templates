@@ -111,6 +111,25 @@ inspect_release() {
 		'{release_id: $release_id, state: $state}'
 }
 
+inspect_created_release() {
+	local tag=$1 candidate=$2 prerelease=$3 response state
+	local -a discovery_delays
+	read -r -a discovery_delays <<< "${RAN_RELEASE_DISCOVERY_DELAYS:-0 2 2 2 2}"
+	[[ ${#discovery_delays[@]} -gt 0 ]] || fail 'release discovery delays are empty.'
+	for delay in "${discovery_delays[@]}"; do
+		sleep "$delay"
+		response=$(inspect_release "$tag" "$candidate" "$prerelease") \
+			|| fail 'created release lookup failed.'
+		state=$(jq -er '.state' <<< "$response")
+		if [[ "$state" == draft ]]; then
+			printf '%s\n' "$response"
+			return 0
+		fi
+		[[ "$state" == absent ]] || fail 'created release is not an exact draft.'
+	done
+	fail 'created draft did not become visible within the bounded readback window.'
+}
+
 verify_asset() {
 	local tag=$1 archive=$2 release_id=$3 candidate=$4 prerelease=$5 mode=$6
 	local name size digest response state asset_count
@@ -189,10 +208,14 @@ case ${1:-} in
 		[[ $# -eq 4 ]] || fail 'expected inspect <tag> <candidate> <prerelease>.'
 		inspect_release "$2" "$3" "$4"
 		;;
+	inspect-created)
+		[[ $# -eq 4 ]] || fail 'expected inspect-created <tag> <candidate> <prerelease>.'
+		inspect_created_release "$2" "$3" "$4"
+		;;
 	verify)
 		[[ $# -eq 7 ]] \
 			|| fail 'expected verify <tag> <archive> <release-id> <candidate> <prerelease> <pending|published>.'
 		verify_asset "$2" "$3" "$4" "$5" "$6" "$7"
 		;;
-	*) fail 'expected inspect or verify command.' ;;
+	*) fail 'expected inspect, inspect-created, or verify command.' ;;
 esac
