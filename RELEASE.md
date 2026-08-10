@@ -12,14 +12,15 @@
    identical-tree eligibility evidence.
 5. Consumer API 2 embeds GitHub's numeric release ID, which does not exist until
    the draft is created. After that gated draft mutation, the release workflow
-   extracts the Quality-produced inputs, finalizes the release-ID-bound pack
-   exactly once, uploads or byte-compares the ZIP, and downloads it for
-   authoritative readback. This is the intentional exception to prebuilding the
-   final release asset in Quality; removing the release ID would break Consumer
-   API 2. An already-published or lost-acknowledgement rerun recovers the exact
-   release ID, rebuilds the candidate from the same Quality inputs, validates the
-   single asset metadata, downloads it, and compares bytes without uploading or
-   replacing anything.
+   proves the downloaded Quality input tar byte-identical to a fresh
+   `git archive` of the successful commit. It then projects the
+   release-ID-bound pack from Git objects at that commit, uploads or
+   byte-compares the ZIP, and downloads it for authoritative readback. This is
+   the intentional exception to prebuilding the final release asset in Quality;
+   removing the release ID would break Consumer API 2. An already-published or
+   lost-acknowledgement rerun recovers the exact release ID, rebuilds the same
+   commit, validates the single asset metadata, downloads it, and compares bytes
+   without uploading or replacing anything.
 6. Enable GitHub immutable releases and set the repository variable
    `RAN_IMMUTABLE_RELEASES_ENABLED=true` before publication. Otherwise the
    verified release intentionally remains a draft.
@@ -42,3 +43,12 @@ candidate selector, exact release/tag/asset state inspection, immutable
 published-rerun rebuild and byte readback, and the executable real-Git/fake-`gh`
 failure matrix. It adds no PHP, package dependency, logical ID, placeholder, or
 target path.
+
+T2 source commit `c554543` raises those totals to 2,181 non-test lines (+241
+from T1), 1,227 test and fixture lines (+348), and a 666-line published payload
+(+123). The executable delta is the explicit-commit Git projection and
+independent comparison at both archive layers; the test delta is the disposable
+pack/plugin/theme Git histories, dirty-worktree, cross-umask, changed-commit,
+wrong-commit, and invalid committed-entry outcomes. Staged archive modes are
+canonicalized to 0755 directories and 0644 files. T2 adds no PHP, package
+dependency, logical ID, placeholder, target path, settings, or publication.

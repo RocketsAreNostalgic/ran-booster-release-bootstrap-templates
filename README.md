@@ -38,15 +38,21 @@ merged Release Please pull request for that SHA. Release Please uses the
 `simple` strategy and a root `CHANGELOG.md`; the consumer also creates or safely
 extends root `.prettierignore` with `/CHANGELOG.md`.
 
+Both the pack and the generated plugin/theme builders require an explicit Git
+commit. Version sources, allowlists, headers, manifest inputs, and every
+archived payload byte are projected from that commit; dirty tracked or
+untracked checkout files are not artifact authority. Their verifiers
+independently compare the archive with the same committed projection.
+
 ## Development
 
 Requirements: Node.js 20 or newer, Bash, `zip`, `unzip`, and `shasum`.
 
 ```sh
 npm test
-npm run build -- dist <repository-id> <release-id> v0.1.0 <release-commit>
+npm run build -- dist <repository-id> <release-id> v0.2.0 <release-commit>
 bash scripts/verify-pack.sh dist/ran-booster-release-bootstrap-templates.zip \
-  <repository-id> <release-id> v0.1.0 <release-commit>
+  <repository-id> <release-id> v0.2.0 <release-commit>
 ```
 
 Every release contains one fixed-name asset,
