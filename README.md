@@ -44,6 +44,16 @@ archived payload byte are projected from that commit; dirty tracked or
 untracked checkout files are not artifact authority. Their verifiers
 independently compare the archive with the same committed projection.
 
+Before extraction, both verifiers parse the ZIP central directory and local
+records, reject unsafe or ambiguous paths and member types, enforce fixed
+archive, member, expanded-size, and compression-ratio limits, and validate each
+stored or deflated member's actual length and CRC. They then prove the exact
+expected member set before allowing `unzip` to inspect or extract the archive.
+The template pack is limited to 2 MiB, 32 members, 256 KiB per member, 1 MiB
+expanded, and a 200:1 ratio. Generated WordPress release ZIPs use the updater's
+50 MiB archive, 10,000-member, and 127,826,407-byte expanded envelope with the
+same fixed ratio.
+
 ## Development
 
 Requirements: Node.js 20 or newer, Bash, `zip`, `unzip`, and `shasum`.

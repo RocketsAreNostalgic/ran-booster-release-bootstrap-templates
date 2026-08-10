@@ -52,3 +52,19 @@ pack/plugin/theme Git histories, dirty-worktree, cross-umask, changed-commit,
 wrong-commit, and invalid committed-entry outcomes. Staged archive modes are
 canonicalized to 0755 directories and 0644 files. T2 adds no PHP, package
 dependency, logical ID, placeholder, target path, settings, or publication.
+
+T3 source commit `55eff3e` raises those totals to 2,709 non-test lines (+528
+from T2), 1,672 test and fixture lines (+445), and a 922-line published payload
+(+256). Both archive owners now reject malformed structure, unsafe or colliding
+paths, unexpected members, non-regular or executable types, unsupported flags
+and methods, ZIP64, central/local contradictions, corrupt data, and fixed
+archive/member/count/expanded-size/ratio budget violations before extraction.
+The common hostile matrix proves that rejection does not invoke `unzip`, while
+valid pack, plugin, and theme fixtures retain exact-commit and deterministic
+outcomes. The pack limit is 2 MiB / 32 members / 256 KiB per member / 1 MiB
+expanded / 200:1; generated WordPress ZIPs use 50 MiB / 10,000 members /
+127,826,407 bytes per member and total / 200:1. Two builds from the committed
+T3 object were byte-identical at 13,412 bytes with SHA-256
+`d486d9de8fb3ed88e943644b9bdcd07b2f1fca7cfa4a761326552942f500f157`.
+T3 adds no PHP, package dependency, consumer API, logical ID, placeholder,
+profile, target path, setting, runtime change, or publication.
