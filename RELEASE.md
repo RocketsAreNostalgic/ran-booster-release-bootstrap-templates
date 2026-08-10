@@ -27,6 +27,15 @@
 7. Never replace, delete, or retag a historical pack release. Publish a new
    patch release for a compatible template correction.
 
+Before starting a publication run, read back repository ruleset `20644157`
+(`Main release integrity`) as active on `refs/heads/main`, with no bypass actor,
+merge-commit pull requests, zero required approvals, strict GitHub Actions
+checks `Pack inputs` and `Quality` from app ID `15368`, and deletion and
+non-fast-forward rules. Also read back repository-level immutable releases as
+enabled and the Actions variable as the exact lowercase string `true`. The
+ruleset was created from an unprotected baseline; deleting it is the exact
+rollback, but doing so invalidates publication eligibility.
+
 ## Prepublication evidence boundary
 
 There is deliberately no final release ZIP before the draft exists. Consumer
