@@ -20,13 +20,11 @@ release_commit=$(git -C "$project_root" rev-parse --verify "$release_ref^{commit
 archive_size=$(wc -c < "$archive" | tr -d '[:space:]')
 [[ "$archive_size" =~ ^[1-9][0-9]*$ && "$archive_size" -le 2097152 ]] \
 	|| fail 'template-pack ZIP size is invalid.'
-unzip -tqq "$archive" >/dev/null || fail 'template-pack ZIP is corrupt.'
 
 temporary=$(mktemp -d "${TMPDIR:-/tmp}/ran-booster-template-verify.XXXXXX")
 actual=$(mktemp)
 expected=$(mktemp)
-raw=$(mktemp)
-trap 'rm -rf "$temporary"; rm -f "$actual" "$expected" "$raw"' EXIT HUP INT TERM
+trap 'rm -rf "$temporary"; rm -f "$actual" "$expected"' EXIT HUP INT TERM
 source_root="$temporary/source"
 actual_root="$temporary/actual"
 expected_root="$temporary/expected"
@@ -70,6 +68,7 @@ for required in \
 	package.json \
 	scripts/contract.mjs \
 	scripts/generate-manifest.mjs \
+	scripts/inspect-pack-archive.mjs \
 	scripts/validate-pack.mjs \
 	src/template-pack.source.json; do
 	regular_blob_oid "$required" >/dev/null
@@ -82,26 +81,22 @@ version=$(node -e 'const p=require(process.argv[1]); process.stdout.write(p.vers
 [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
 	|| fail 'package version is invalid.'
 
-unzip -Z1 "$archive" > "$raw"
-LC_ALL=C sort -u "$raw" > "$actual"
-[[ "$(wc -l < "$raw" | tr -d '[:space:]')" == "$(wc -l < "$actual" | tr -d '[:space:]')" ]] \
-	|| fail 'template-pack ZIP contains duplicate member names.'
-if zipinfo -l "$archive" | awk '$1 ~ /^l/ { found = 1 } END { exit !found }'; then
-	fail 'template-pack ZIP contains symbolic links.'
-fi
-if zipinfo -l "$archive" | awk '$1 ~ /^-/ && $1 ~ /x/ { found = 1 } END { exit !found }'; then
-	fail 'template-pack ZIP contains executable members.'
-fi
-
-unzip -q "$archive" -d "$actual_root"
-declared=$(node "$source_root/scripts/validate-pack.mjs" \
-	"$actual_root" "$repository_id" "$release_id" "$release_tag" "$release_commit")
-node -e 'for (const path of JSON.parse(process.argv[1])) console.log(path)' "$declared" \
-	| LC_ALL=C sort -u > "$expected"
-diff -u "$expected" "$actual" || fail 'template-pack ZIP has an unexpected member set.'
+node "$source_root/scripts/inspect-pack-archive.mjs" "$archive" \
+	| LC_ALL=C sort > "$actual" \
+	|| fail 'template-pack ZIP violates the structural archive contract.'
 node "$source_root/scripts/generate-manifest.mjs" \
 	"$expected_root" "$version" "$repository_id" "$release_id" "$release_tag" "$release_commit"
-while IFS= read -r member; do
+declared=$(node "$source_root/scripts/validate-pack.mjs" \
+	"$expected_root" "$repository_id" "$release_id" "$release_tag" "$release_commit")
+node -e 'for (const path of JSON.parse(process.argv[1])) console.log("F\t" + path)' "$declared" \
+	| LC_ALL=C sort > "$expected"
+diff -u "$expected" "$actual" || fail 'template-pack ZIP has an unexpected member set.'
+unzip -tqq "$archive" >/dev/null || fail 'template-pack ZIP is corrupt.'
+unzip -q "$archive" -d "$actual_root"
+node "$source_root/scripts/validate-pack.mjs" \
+	"$actual_root" "$repository_id" "$release_id" "$release_tag" "$release_commit" >/dev/null
+while IFS=$'\t' read -r type member; do
+	[[ "$type" == F ]] || fail "template-pack member type is invalid: $member"
 	cmp -s "$expected_root/$member" "$actual_root/$member" \
 		|| fail "template-pack member differs from the release commit: $member"
 done < "$expected"

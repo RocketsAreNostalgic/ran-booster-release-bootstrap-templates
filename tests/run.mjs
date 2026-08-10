@@ -7,6 +7,7 @@ import {
   cp,
   mkdtemp,
   mkdir,
+  open,
   readFile,
   rm,
   writeFile,
@@ -30,6 +31,12 @@ const identity = {
   releaseId: "41",
   tag: `v${version}`,
 };
+const testCrcTable = Array.from({ length: 256 }, (_, value) => {
+  let crc = value;
+  for (let bit = 0; bit < 8; bit += 1)
+    crc = (crc & 1) !== 0 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+  return crc >>> 0;
+});
 
 try {
   const schema = await loadJson(
@@ -724,6 +731,22 @@ async function assertRenderedCommitArchive(renderedRoot, values) {
   const archiveName = `${values.PACKAGE_SLUG}-${releaseVersion}.zip`;
   const cleanArchive = path.join(cleanOutput, archiveName);
   const cleanBytes = await readFile(cleanArchive);
+  if (values.PACKAGE_TYPE === "plugin") {
+    await assertHostileArchiveMatrix({
+      label: "rendered release",
+      cleanArchive,
+      archiveBytes: 50 * 1024 * 1024,
+      members: 10000,
+      memberBytes: 127826407,
+      totalBytes: 127826407,
+      runVerify: (candidate, environment) =>
+        spawnSync("bash", [verify, candidate, releaseVersion, commit], {
+          cwd: fixture,
+          encoding: "utf8",
+          env: { ...process.env, ...environment },
+        }),
+    });
+  }
 
   await writeFile(path.join(fixture, "release-contents.txt"), "../unsafe\n");
   await writeFile(
@@ -964,6 +987,28 @@ async function assertDeterministicPack() {
     one.equals(two),
     "Pack builds are not byte-for-byte deterministic.",
   );
+  await assertHostileArchiveMatrix({
+    label: "template pack",
+    cleanArchive: path.join(first, archiveName),
+    archiveBytes: 2 * 1024 * 1024,
+    members: 32,
+    memberBytes: 256 * 1024,
+    totalBytes: 1024 * 1024,
+    runVerify: (candidate, environment) =>
+      spawnSync(
+        "bash",
+        [
+          path.join(sourceFixture, "scripts/verify-pack.sh"),
+          candidate,
+          ...arguments_,
+        ],
+        {
+          cwd: sourceFixture,
+          encoding: "utf8",
+          env: { ...process.env, ...environment },
+        },
+      ),
+  });
   execFileSync(
     "bash",
     [
@@ -1126,4 +1171,404 @@ function runBashWithUmask(script, arguments_, cwd, mask) {
     ],
     { cwd, stdio: "pipe" },
   );
+}
+
+async function assertHostileArchiveMatrix({
+  label,
+  cleanArchive,
+  archiveBytes,
+  members,
+  memberBytes,
+  totalBytes,
+  runVerify,
+}) {
+  const fixture = path.join(temporary, `hostile-${label.replaceAll(" ", "-")}`);
+  const bin = path.join(fixture, "bin");
+  const marker = path.join(fixture, "unzip-called");
+  await mkdir(bin, { recursive: true });
+  const fakeUnzip = path.join(bin, "unzip");
+  await writeFile(
+    fakeUnzip,
+    '#!/usr/bin/env bash\nprintf "called\\n" > "$RAN_UNZIP_MARKER"\nexit 97\n',
+  );
+  await chmod(fakeUnzip, 0o755);
+  const environment = {
+    PATH: `${bin}:${process.env.PATH}`,
+    RAN_UNZIP_MARKER: marker,
+  };
+  const sourceEntries = archiveEntries(cleanArchive);
+  const firstFile = sourceEntries.find((entry) => !entry.name.endsWith("/"));
+  assert.ok(firstFile, `${label} has no regular fixture member.`);
+  const unsafe = "unsafe/member.php";
+  const budgetCompressed = (size) => Math.max(1, Math.ceil(size / 199));
+  const totalEntryCount = Math.floor(totalBytes / memberBytes) + 2;
+  const totalEntrySize = Math.floor(totalBytes / (totalEntryCount - 1)) + 1;
+  const hostileCases = [
+    ["duplicate raw member", "duplicate_member", [firstFile, firstFile]],
+    [
+      "case-normalized collision",
+      "normalized_collision",
+      [firstFile, { ...firstFile, name: firstFile.name.toUpperCase() }],
+    ],
+    [
+      "file-directory collision",
+      "normalized_collision",
+      [firstFile, archiveMember(`${firstFile.name}/`, "", 0o040755)],
+    ],
+    [
+      "file-parent hierarchy",
+      "member_hierarchy",
+      [archiveMember("parent"), archiveMember("parent/child.php")],
+    ],
+    ["absolute path", "member_path", [archiveMember("/absolute.php")]],
+    ["drive path", "member_path", [archiveMember("C:/drive.php")]],
+    ["backslash path", "member_path", [archiveMember("bad\\path.php")]],
+    ["traversal path", "member_path", [archiveMember("../escape.php")]],
+    ["dot segment", "member_path", [archiveMember("bad/./path.php")]],
+    ["empty segment", "member_path", [archiveMember("bad//path.php")]],
+    ["trailing dot", "member_path", [archiveMember("bad./path.php")]],
+    ["trailing space", "member_path", [archiveMember("bad /path.php")]],
+    ["control character", "member_path", [archiveMember("bad\npath.php")]],
+    ["reserved device", "member_path", [archiveMember("CON/file.php")]],
+    ["non-ASCII path", "member_path", [archiveMember("café.php")]],
+    [
+      "invalid UTF-8 path",
+      "name_encoding",
+      [
+        {
+          ...archiveMember("invalid.php"),
+          nameBytes: Buffer.from([0xff]),
+          localNameBytes: Buffer.from([0xff]),
+        },
+      ],
+    ],
+    [
+      "overlong segment",
+      "member_path",
+      [archiveMember(`${"a".repeat(256)}.php`)],
+    ],
+    [
+      "symbolic link",
+      "member_type",
+      [archiveMember(unsafe, "target", 0o120777)],
+    ],
+    ["FIFO", "member_type", [archiveMember(unsafe, "", 0o010644)]],
+    ["socket", "member_type", [archiveMember(unsafe, "", 0o140644)]],
+    ["device", "member_type", [archiveMember(unsafe, "", 0o060644)]],
+    ["executable", "member_executable", [archiveMember(unsafe, "x", 0o100755)]],
+    ["non-Unix host", "member_type", [{ ...archiveMember(unsafe), host: 0 }]],
+    [
+      "encrypted",
+      "unsupported_member",
+      [{ ...archiveMember(unsafe), flags: 1 }],
+    ],
+    [
+      "data descriptor",
+      "unsupported_member",
+      [{ ...archiveMember(unsafe), flags: 8 }],
+    ],
+    [
+      "unsupported compression",
+      "unsupported_member",
+      [{ ...archiveMember(unsafe), method: 12 }],
+    ],
+    [
+      "ZIP extra",
+      "directory_record",
+      [{ ...archiveMember(unsafe), centralExtra: Buffer.from([1, 0, 0, 0]) }],
+    ],
+    [
+      "central comment",
+      "directory_record",
+      [{ ...archiveMember(unsafe), centralComment: Buffer.from("comment") }],
+    ],
+    [
+      "local extra",
+      "local_mismatch",
+      [{ ...archiveMember(unsafe), localExtra: Buffer.from([1, 0, 0, 0]) }],
+    ],
+    [
+      "central disk start",
+      "directory_record",
+      [{ ...archiveMember(unsafe), diskStart: 1 }],
+    ],
+    [
+      "ZIP64 version",
+      "directory_record",
+      [{ ...archiveMember(unsafe), needed: 45 }],
+    ],
+    [
+      "ZIP64 entry count",
+      "multidisk_or_zip64",
+      [archiveMember(unsafe)],
+      { entryCount: 0xffff },
+    ],
+    [
+      "EOCD comment",
+      "directory_missing",
+      [archiveMember(unsafe)],
+      { eocdComment: Buffer.from("comment") },
+    ],
+    [
+      "trailing data",
+      "directory_missing",
+      [archiveMember(unsafe)],
+      { trailing: Buffer.from("trailing") },
+    ],
+    [
+      "member budget",
+      "member_budget",
+      [
+        {
+          ...archiveMember(unsafe),
+          compressedSize: budgetCompressed(memberBytes + 1),
+          uncompressedSize: memberBytes + 1,
+        },
+      ],
+    ],
+    [
+      "ratio budget",
+      "member_budget",
+      [
+        {
+          ...archiveMember(unsafe),
+          compressedSize: 1,
+          uncompressedSize: 201,
+        },
+      ],
+    ],
+    [
+      "total budget",
+      "total_budget",
+      Array.from({ length: totalEntryCount }, (_, index) => ({
+        ...archiveMember(`total-${index}.php`),
+        compressedSize: budgetCompressed(totalEntrySize),
+        uncompressedSize: totalEntrySize,
+      })),
+    ],
+    [
+      "member-count budget",
+      "directory_bounds",
+      [archiveMember(unsafe)],
+      { entryCount: members + 1 },
+    ],
+    [
+      "local name mismatch",
+      "local_mismatch",
+      [{ ...archiveMember(unsafe), localName: "other/member.php" }],
+    ],
+    [
+      "local flags mismatch",
+      "local_mismatch",
+      [{ ...archiveMember(unsafe), localFlags: 0x0800 }],
+    ],
+    [
+      "local method mismatch",
+      "local_mismatch",
+      [{ ...archiveMember(unsafe), localMethod: 8 }],
+    ],
+    [
+      "local CRC mismatch",
+      "local_mismatch",
+      [{ ...archiveMember(unsafe), localCrc: 1 }],
+    ],
+    [
+      "local size mismatch",
+      "local_mismatch",
+      [{ ...archiveMember(unsafe), localUncompressedSize: 2 }],
+    ],
+    [
+      "overlapping local records",
+      "local_bounds",
+      [
+        archiveMember("one.php"),
+        { ...archiveMember("two.php"), localOffset: 0 },
+      ],
+    ],
+    [
+      "incorrect CRC",
+      "member_integrity",
+      [{ ...archiveMember(unsafe), crc: 1, localCrc: 1 }],
+    ],
+    [
+      "expanded size mismatch",
+      "member_integrity",
+      [
+        {
+          ...archiveMember(unsafe),
+          uncompressedSize: 2,
+          localUncompressedSize: 2,
+        },
+      ],
+    ],
+    [
+      "corrupt deflate stream",
+      "member_decompression",
+      [{ ...archiveMember(unsafe, "not-deflate"), method: 8 }],
+    ],
+    [
+      "directory payload",
+      "directory_payload",
+      [archiveMember("payload/", "x", 0o040755)],
+    ],
+    [
+      "unexpected member",
+      "unexpected",
+      [...sourceEntries, archiveMember("unexpected-member.txt")],
+    ],
+  ];
+
+  for (const [caseName, code, entries, options = {}] of hostileCases) {
+    const candidate = path.join(
+      fixture,
+      `${caseName.replaceAll(/[^A-Za-z0-9]+/g, "-")}.zip`,
+    );
+    await writeFile(candidate, makeZip(entries, options));
+    await rm(marker, { force: true });
+    const result = runVerify(candidate, environment);
+    assert.notEqual(result.status, 0, `${label} accepted ${caseName}.`);
+    if (code === "unexpected")
+      assert.match(
+        result.stderr,
+        /unexpected member set|committed runtime allowlist/i,
+      );
+    else
+      assert.match(
+        result.stderr,
+        new RegExp(code, "i"),
+        `${label}: ${caseName}`,
+      );
+    await assert.rejects(
+      readFile(marker),
+      undefined,
+      `${label} extracted ${caseName}.`,
+    );
+  }
+
+  const oversized = path.join(fixture, "oversized.zip");
+  const handle = await open(oversized, "w");
+  await handle.truncate(archiveBytes + 1);
+  await handle.close();
+  await rm(marker, { force: true });
+  const result = runVerify(oversized, environment);
+  assert.notEqual(result.status, 0, `${label} accepted an oversized archive.`);
+  assert.match(result.stderr, /archive_size|ZIP size is invalid/i);
+  await assert.rejects(
+    readFile(marker),
+    undefined,
+    `${label} extracted an oversized archive.`,
+  );
+}
+
+function archiveEntries(archive) {
+  const names = execFileSync("unzip", ["-Z1", archive], { encoding: "utf8" })
+    .trim()
+    .split("\n");
+  return names.map((name) =>
+    archiveMember(
+      name,
+      name.endsWith("/")
+        ? Buffer.alloc(0)
+        : execFileSync("unzip", ["-p", archive, name]),
+      name.endsWith("/") ? 0o040755 : 0o100644,
+    ),
+  );
+}
+
+function archiveMember(name, contents = "x", mode = 0o100644) {
+  return {
+    name,
+    contents: Buffer.isBuffer(contents) ? contents : Buffer.from(contents),
+    mode,
+  };
+}
+
+function makeZip(entries, options = {}) {
+  const local = [];
+  const central = [];
+  let offset = 0;
+  for (const entry of entries) {
+    const name = entry.nameBytes ?? Buffer.from(entry.name);
+    const localName =
+      entry.localNameBytes ?? Buffer.from(entry.localName ?? entry.name);
+    const contents = entry.contents;
+    const crc = entry.crc ?? testCrc32(contents);
+    const compressedSize = entry.compressedSize ?? contents.length;
+    const uncompressedSize = entry.uncompressedSize ?? contents.length;
+    const flags = entry.flags ?? 0;
+    const method = entry.method ?? 0;
+    const localExtra = entry.localExtra ?? Buffer.alloc(0);
+    const centralExtra = entry.centralExtra ?? Buffer.alloc(0);
+    const centralComment = entry.centralComment ?? Buffer.alloc(0);
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(entry.localNeeded ?? entry.needed ?? 20, 4);
+    localHeader.writeUInt16LE(entry.localFlags ?? flags, 6);
+    localHeader.writeUInt16LE(entry.localMethod ?? method, 8);
+    localHeader.writeUInt32LE(entry.localCrc ?? crc, 14);
+    localHeader.writeUInt32LE(entry.localCompressedSize ?? compressedSize, 18);
+    localHeader.writeUInt32LE(
+      entry.localUncompressedSize ?? uncompressedSize,
+      22,
+    );
+    localHeader.writeUInt16LE(localName.length, 26);
+    localHeader.writeUInt16LE(localExtra.length, 28);
+    const localRecord = Buffer.concat([
+      localHeader,
+      localName,
+      localExtra,
+      contents,
+    ]);
+    local.push(localRecord);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(((entry.host ?? 3) << 8) | 20, 4);
+    centralHeader.writeUInt16LE(entry.needed ?? 20, 6);
+    centralHeader.writeUInt16LE(flags, 8);
+    centralHeader.writeUInt16LE(method, 10);
+    centralHeader.writeUInt32LE(crc, 16);
+    centralHeader.writeUInt32LE(compressedSize, 20);
+    centralHeader.writeUInt32LE(uncompressedSize, 24);
+    centralHeader.writeUInt16LE(name.length, 28);
+    centralHeader.writeUInt16LE(centralExtra.length, 30);
+    centralHeader.writeUInt16LE(centralComment.length, 32);
+    centralHeader.writeUInt16LE(entry.diskStart ?? 0, 34);
+    const dosDirectory = entry.name.endsWith("/") ? 0x10 : 0;
+    centralHeader.writeUInt32LE(
+      (((entry.mode << 16) >>> 0) | dosDirectory) >>> 0,
+      38,
+    );
+    centralHeader.writeUInt32LE(entry.localOffset ?? offset, 42);
+    central.push(
+      Buffer.concat([centralHeader, name, centralExtra, centralComment]),
+    );
+    offset += localRecord.length;
+  }
+  const centralBytes = Buffer.concat(central);
+  const eocdComment = options.eocdComment ?? Buffer.alloc(0);
+  const eocd = Buffer.alloc(22);
+  const entryCount = options.entryCount ?? entries.length;
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(options.disk ?? 0, 4);
+  eocd.writeUInt16LE(options.centralDisk ?? 0, 6);
+  eocd.writeUInt16LE(options.diskEntries ?? entryCount, 8);
+  eocd.writeUInt16LE(entryCount, 10);
+  eocd.writeUInt32LE(centralBytes.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  eocd.writeUInt16LE(eocdComment.length, 20);
+  return Buffer.concat([
+    ...local,
+    centralBytes,
+    eocd,
+    eocdComment,
+    options.trailing ?? Buffer.alloc(0),
+  ]);
+}
+
+function testCrc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes)
+    crc = testCrcTable[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
 }

@@ -61,6 +61,7 @@ for required in \
 	package.json \
 	scripts/contract.mjs \
 	scripts/generate-manifest.mjs \
+	scripts/inspect-pack-archive.mjs \
 	scripts/validate-pack.mjs \
 	src/template-pack.source.json; do
 	regular_blob_oid "$required" >/dev/null
