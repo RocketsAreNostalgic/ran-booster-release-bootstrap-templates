@@ -15,7 +15,7 @@ concurrency:
 jobs:
   pack-inputs:
     name: Pack inputs
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions:
       contents: read
     steps:
@@ -77,7 +77,7 @@ jobs:
 
   test:
     name: Quality
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions:
       contents: read
     steps:
