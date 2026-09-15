@@ -24,13 +24,14 @@ required tests, pinned Actions, deterministic builds, immutable releases, and
 target-owner review are all required. Digest verification proves which bytes
 were reviewed; it does not make arbitrary shell or YAML safe.
 
-Repository ruleset `Main release integrity` protects `main` without a bypass:
-updates require a pull request merged with a normal merge commit, `Pack inputs`
-and `Quality` from the GitHub Actions app must both pass against the current
-branch, and force pushes and branch deletion are prohibited. The sole-maintainer
-floor intentionally requires zero second-human approvals. `CODEOWNERS` declares
-source ownership; target owners separately review generated changes in their
-own repositories, so neither is represented as a second Templates approval.
+Repository ruleset `Protect default branch` protects `main` without a bypass:
+updates require a pull request merged by squash or merge, stale approvals are
+dismissed after new pushes, `Pack inputs` and `Quality` from the GitHub Actions
+app must both pass against the current branch, and force pushes and branch
+deletion are prohibited. The sole-maintainer floor intentionally requires zero
+second-human approvals. `CODEOWNERS` declares source ownership; target owners
+separately review generated changes in their own repositories, so neither is
+represented as a second Templates approval.
 
 Repository-level immutable releases are enabled and the Actions variable
 `RAN_IMMUTABLE_RELEASES_ENABLED` is the exact string `true`. These controls are
