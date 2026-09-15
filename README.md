@@ -68,10 +68,11 @@ expanded, and a 200:1 ratio. Generated WordPress release ZIPs use the updater's
 50 MiB archive, 10,000-member, and 127,826,407-byte expanded envelope with the
 same fixed ratio.
 
-The `main` branch is protected by the active `Main release integrity` ruleset:
-pull requests use normal merge commits, both `Pack inputs` and `Quality` must
-pass from GitHub Actions against current `main`, no second-human approval is
-required, and force pushes and deletion are blocked. Immutable releases are
+The `main` branch is protected by the active `Protect default branch` ruleset:
+pull requests may use squash or merge commits, both `Pack inputs` and `Quality`
+must pass from GitHub Actions against current `main`, stale approvals are
+dismissed after new pushes, no broad organisation-admin pull-request bypass is
+configured, and force pushes and deletion are blocked. Immutable releases are
 enabled and `RAN_IMMUTABLE_RELEASES_ENABLED=true`; these settings are necessary
 preconditions and do not themselves authorize a release.
 
