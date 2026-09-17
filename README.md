@@ -78,11 +78,12 @@ preconditions and do not themselves authorize a release.
 
 ## Development
 
-Requirements: Node.js 20 or newer, Bash, `zip`, `unzip`, and `shasum`.
+Repository verification uses Node.js 24.11.0 and pnpm 11.13.1. Bash, `zip`,
+`unzip`, and `shasum` are also required.
 
 ```sh
-npm test
-npm run build -- dist <repository-id> <release-id> v0.2.0 <release-commit>
+pnpm check
+pnpm run build -- dist <repository-id> <release-id> v0.2.0 <release-commit>
 bash scripts/verify-pack.sh dist/ran-booster-release-bootstrap-templates.zip \
   <repository-id> <release-id> v0.2.0 <release-commit>
 ```
