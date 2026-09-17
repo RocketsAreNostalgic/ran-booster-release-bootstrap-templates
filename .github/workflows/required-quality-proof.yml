@@ -8,4 +8,4 @@ permissions:
 
 jobs:
   required-quality:
-    uses: RocketsAreNostalgic/.github/.github/workflows/required-quality-node.yml@18a63f8816026c0c2e63b9434d238a4093702e68
+    uses: RocketsAreNostalgic/.github/.github/workflows/required-quality-node.yml@cd0fd754bfcf524a378de63bf7534bb057cf85d4
