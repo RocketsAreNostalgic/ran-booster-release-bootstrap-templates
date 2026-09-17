@@ -1,0 +1,11 @@
+name: Required quality proof
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  required-quality:
+    uses: RocketsAreNostalgic/.github/.github/workflows/required-quality-node.yml@033d16479685c341b41d0e626310451725f89780
