@@ -5,11 +5,17 @@
   "description": "Immutable template packs for RAN Booster release bootstrap",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=20",
+    "pnpm": ">=11 <12"
+  },
+  "packageManager": "pnpm@11.13.1",
+  "volta": {
+    "node": "24.11.0"
   },
   "scripts": {
     "build": "bash scripts/build-pack.sh",
     "verify": "bash scripts/verify-pack.sh",
-    "test": "node tests/run.mjs && node --test tests/quality-workflow.test.mjs"
+    "test": "node tests/run.mjs && node --test tests/quality-workflow.test.mjs",
+    "check": "pnpm test"
   }
 }

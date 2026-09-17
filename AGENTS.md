@@ -23,11 +23,12 @@ Release Deployments. It is an independent product, not a WordPress plugin.
 
 ## Required checks
 
-Run `npm test`. It validates the source contract and real-Git release-candidate
-decisions, renders plugin and theme fixtures, checks JSON and shell syntax,
-builds the pack twice, compares the bytes, and verifies the archive and member
-digests. Full tests are mandatory on every pull request, including Release
-Please pull requests.
+Use the repository-declared Node 24.11.0 / pnpm 11.13.1 development toolchain
+and run `pnpm check`. It validates the source contract and real-Git
+release-candidate decisions, renders plugin and theme fixtures, checks JSON and
+shell syntax, builds the pack twice, compares the bytes, and verifies the
+archive and member digests. Full checks are mandatory on every pull request,
+including Release Please pull requests.
 
 Release Please owns `CHANGELOG.md`; keep `/CHANGELOG.md` in `.prettierignore`.
 Use Conventional Commits. Do not manually edit release tags or generated
