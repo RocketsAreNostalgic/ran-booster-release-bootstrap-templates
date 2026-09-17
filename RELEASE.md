@@ -1,7 +1,7 @@
 # Release process
 
 1. Use a Conventional Commit (`fix`, `feat`, or an explicit breaking change).
-2. Require `npm test` and review the rendered plugin and theme fixtures.
+2. Require `pnpm check` and review the rendered plugin and theme fixtures.
 3. Merge the Release Please pull request only after confirming `package.json`,
    `.release-please-manifest.json`, and release notes agree.
 4. Quality runs the complete test suite and stores an exact, hashed source-input
