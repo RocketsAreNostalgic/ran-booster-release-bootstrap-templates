@@ -10,6 +10,6 @@
   "scripts": {
     "build": "bash scripts/build-pack.sh",
     "verify": "bash scripts/verify-pack.sh",
-    "test": "node tests/run.mjs"
+    "test": "node tests/run.mjs && node --test tests/quality-workflow.test.mjs"
   }
 }
