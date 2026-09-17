@@ -31,7 +31,9 @@ test("Pack inputs stays exact-head and repository-owned", () => {
   const exactExpected =
     "RAN_EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}";
 
+  assert.match(workflow, /^permissions: \{\}$/m);
   assert.match(packInputs, /name: Pack inputs/);
+  assert.match(packInputs, /permissions:\n\s+contents: read/);
   assert.ok(packInputs.includes("persist-credentials: false"));
   assert.ok(packInputs.includes(exactRef));
   assert.ok(packInputs.includes(exactExpected));
@@ -51,6 +53,7 @@ test("Pack inputs stays exact-head and repository-owned", () => {
 test("shared Node baseline is immutable and uses the house pnpm toolchain", () => {
   const baseline = job("baseline", "test");
 
+  assert.match(baseline, /permissions:\n\s+contents: read/);
   assert.match(
     baseline,
     /uses: RocketsAreNostalgic\/.github\/\.github\/workflows\/quality-node\.yml@72a90b5826db37d1e94cdcdcf3374ccf58c0aa7d/,
