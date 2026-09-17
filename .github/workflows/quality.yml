@@ -9,7 +9,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: quality-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+  group: quality-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
