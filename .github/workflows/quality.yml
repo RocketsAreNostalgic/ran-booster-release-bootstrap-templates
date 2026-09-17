@@ -6,8 +6,7 @@ on:
     branches:
       - "main"
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: quality-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
@@ -89,6 +88,8 @@ jobs:
 
   baseline:
     name: Shared Node quality
+    permissions:
+      contents: read
     uses: RocketsAreNostalgic/.github/.github/workflows/quality-node.yml@72a90b5826db37d1e94cdcdcf3374ccf58c0aa7d
     with:
       node-version-file: package.json
