@@ -9,9 +9,8 @@ fail() {
 project_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 output_dir=${1:-"$project_root/dist"}
 repository_id=${2:-}
-release_id=${3:-}
-release_tag=${4:-}
-release_ref=${5:-}
+release_tag=${3:-}
+release_ref=${4:-}
 [[ -n "$release_ref" ]] || fail 'expected an explicit release commit.'
 release_commit=$(git -C "$project_root" rev-parse --verify "$release_ref^{commit}") \
 	|| fail 'release ref does not resolve to a commit.'
@@ -74,10 +73,9 @@ git -C "$project_root" archive --format=tar "$release_commit" -- \
 version=$(node -e 'const p=require(process.argv[1]); process.stdout.write(p.version || "")' "$source_root/package.json")
 [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || fail 'package version is invalid.'
 [[ "$repository_id" =~ ^[1-9][0-9]*$ ]] || fail 'expected a positive repository ID.'
-[[ "$release_id" =~ ^[1-9][0-9]*$ ]] || fail 'expected a positive release ID.'
 [[ "$release_tag" == "v$version" ]] || fail 'release tag and package version differ.'
 node "$source_root/scripts/generate-manifest.mjs" \
-	"$stage" "$version" "$repository_id" "$release_id" "$release_tag" "$release_commit"
+	"$stage" "$version" "$repository_id" "$release_tag" "$release_commit"
 find "$stage" -type d -exec chmod 0755 {} +
 find "$stage" -type f -exec chmod 0644 {} +
 find "$stage" -exec touch -h -t 198001010000 {} +
@@ -90,5 +88,5 @@ rm -f "$archive"
 	find template-pack.json templates -type f -print | LC_ALL=C sort | zip -DXq "$archive" -@
 )
 bash "$project_root/scripts/verify-pack.sh" \
-	"$archive" "$repository_id" "$release_id" "$release_tag" "$release_commit"
+	"$archive" "$repository_id" "$release_tag" "$release_commit"
 printf '%s\n' "$archive"

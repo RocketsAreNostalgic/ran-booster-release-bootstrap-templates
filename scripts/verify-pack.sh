@@ -9,9 +9,8 @@ fail() {
 project_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 archive=${1:-"$project_root/dist/ran-booster-release-bootstrap-templates.zip"}
 repository_id=${2:-}
-release_id=${3:-}
-release_tag=${4:-}
-release_ref=${5:-}
+release_tag=${3:-}
+release_ref=${4:-}
 [[ -n "$release_ref" ]] || fail 'expected an explicit release commit.'
 release_commit=$(git -C "$project_root" rev-parse --verify "$release_ref^{commit}") \
 	|| fail 'release ref does not resolve to a commit.'
@@ -85,16 +84,16 @@ node "$source_root/scripts/inspect-pack-archive.mjs" "$archive" \
 	| LC_ALL=C sort > "$actual" \
 	|| fail 'template-pack ZIP violates the structural archive contract.'
 node "$source_root/scripts/generate-manifest.mjs" \
-	"$expected_root" "$version" "$repository_id" "$release_id" "$release_tag" "$release_commit"
+	"$expected_root" "$version" "$repository_id" "$release_tag" "$release_commit"
 declared=$(node "$source_root/scripts/validate-pack.mjs" \
-	"$expected_root" "$repository_id" "$release_id" "$release_tag" "$release_commit")
+	"$expected_root" "$repository_id" "$release_tag" "$release_commit")
 node -e 'for (const path of JSON.parse(process.argv[1])) console.log("F\t" + path)' "$declared" \
 	| LC_ALL=C sort > "$expected"
 diff -u "$expected" "$actual" || fail 'template-pack ZIP has an unexpected member set.'
 unzip -tqq "$archive" >/dev/null || fail 'template-pack ZIP is corrupt.'
 unzip -q "$archive" -d "$actual_root"
 node "$source_root/scripts/validate-pack.mjs" \
-	"$actual_root" "$repository_id" "$release_id" "$release_tag" "$release_commit" >/dev/null
+	"$actual_root" "$repository_id" "$release_tag" "$release_commit" >/dev/null
 while IFS=$'\t' read -r type member; do
 	[[ "$type" == F ]] || fail "template-pack member type is invalid: $member"
 	cmp -s "$expected_root/$member" "$actual_root/$member" \

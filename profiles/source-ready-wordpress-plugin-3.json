@@ -1,0 +1,44 @@
+{
+  "id": "source-ready-wordpress-plugin/3",
+  "profile_version": 1,
+  "entries": {
+    "quality-workflow": {
+      "path": "templates/shared/quality.yml.tmpl",
+      "placeholders": {
+        "PACKAGE_SLUG": "slug",
+        "PHP_VERSION": "php_version"
+      }
+    },
+    "release-workflow": {
+      "path": "templates/shared/release-please.yml.tmpl",
+      "placeholders": {
+        "PACKAGE_SLUG": "slug"
+      }
+    },
+    "release-please-config": {
+      "path": "templates/shared/release-please-config.json.tmpl",
+      "placeholders": {
+        "BASE_SHA": "sha",
+        "EXTRA_FILES_JSON": "json_fragment",
+        "PACKAGE_SLUG": "slug"
+      }
+    },
+    "build-release-script": {
+      "path": "templates/shared/build-release.sh.tmpl",
+      "placeholders": {
+        "HEADER_PATH": "path",
+        "PACKAGE_SLUG": "slug",
+        "PACKAGE_TYPE": "package_type"
+      }
+    },
+    "verify-release-script": {
+      "path": "templates/shared/verify-release.sh.tmpl",
+      "placeholders": {
+        "HEADER_PATH": "path",
+        "PACKAGE_SLUG": "slug",
+        "PACKAGE_TYPE": "package_type",
+        "UPDATE_URI": "github_uri"
+      }
+    }
+  }
+}
