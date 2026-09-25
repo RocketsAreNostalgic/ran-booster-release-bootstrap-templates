@@ -1,0 +1,90 @@
+name: Quality
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact source
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
+        with:
+          php-version: '{{RAN_PHP_VERSION}}'
+          coverage: none
+
+      - name: Build and check the exact installable package
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          export TZ=UTC LC_ALL=C
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          version="$(git show "${SOURCE_SHA}:version.txt")"
+          [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "${#version}" -le 63
+          archive="{{RAN_PACKAGE_SLUG}}-${version}.zip"
+          test "${#archive}" -le 200
+          test "$(git show "${SOURCE_SHA}:.release-please-manifest.json" | jq -er '."."')" = "$version"
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          bash scripts/build-release.sh "$SOURCE_SHA" "$version" "$work/one"
+          bash scripts/build-release.sh "$SOURCE_SHA" "$version" "$work/two"
+          cmp "$work/one/$archive" "$work/two/$archive"
+          bash scripts/verify-release.sh "$work/one/$archive" "$version" "$SOURCE_SHA"
+          unzip -q "$work/one/$archive" -d "$work/payload"
+          find "$work/payload" -type f -name '*.php' -print0 | xargs -0 -r -n1 php -l
+          test ! -e .ran-booster-release-dist
+          test ! -L .ran-booster-release-dist
+          mkdir .ran-booster-release-dist
+          cp "$work/one/$archive" ".ran-booster-release-dist/$archive"
+          digest="$(sha256sum ".ran-booster-release-dist/$archive" | cut -d ' ' -f 1)"
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg source "$SOURCE_SHA" \
+            --arg tag "v$version" \
+            --arg name "$archive" \
+            --arg digest "$digest" \
+            '{schema:"ran-profile-b-promotion",schema_version:1,
+              repository:$repository,quality_commit:$source,source_commit:$source,
+              tag:$tag,assets:[{name:$name,sha256:$digest}]}' \
+            > .ran-booster-release-dist/ran-profile-b-promotion.json
+          test "$(find .ran-booster-release-dist -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 2
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ran-starter-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .ran-booster-release-dist/{{RAN_PACKAGE_SLUG}}-*.zip
+            .ran-booster-release-dist/ran-profile-b-promotion.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
