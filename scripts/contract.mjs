@@ -11,21 +11,24 @@ export const repositoryName =
   "RocketsAreNostalgic/ran-booster-release-bootstrap-templates";
 
 export const profileFiles = [
-  "profiles/source-ready-wordpress-plugin-2.json",
-  "profiles/source-ready-wordpress-theme-2.json",
+  "profiles/source-ready-wordpress-plugin-3.json",
+  "profiles/source-ready-wordpress-theme-3.json",
 ];
 
 export const logicalIds = [
+  "quality-workflow",
   "release-workflow",
   "release-please-config",
   "build-release-script",
   "verify-release-script",
-  "upload-release-assets-script",
 ];
 
 const expectedPlaceholders = {
+  "quality-workflow": {
+    PACKAGE_SLUG: "slug",
+    PHP_VERSION: "php_version",
+  },
   "release-workflow": {
-    DEFAULT_BRANCH: "branch",
     PACKAGE_SLUG: "slug",
   },
   "release-please-config": {
@@ -44,7 +47,6 @@ const expectedPlaceholders = {
     PACKAGE_TYPE: "package_type",
     UPDATE_URI: "github_uri",
   },
-  "upload-release-assets-script": {},
 };
 
 const forbiddenManifestKeys = new Set([
@@ -92,8 +94,8 @@ export function validateSource(source, profiles) {
     "source manifest",
   );
   assert(
-    source.schema_version === 1 && source.consumer_api === 2,
-    "Only Consumer API 2 is supported.",
+    source.schema_version === 1 && source.consumer_api === 3,
+    "Only Consumer API 3 is supported.",
   );
   assert(
     JSON.stringify(source.profiles) === JSON.stringify(profileFiles),
@@ -116,12 +118,12 @@ export function validatePublished(manifest) {
     "manifest",
   );
   assert(
-    manifest.schema_version === 1 && manifest.consumer_api === 2,
-    "Only Consumer API 2 is supported.",
+    manifest.schema_version === 1 && manifest.consumer_api === 3,
+    "Only Consumer API 3 is supported.",
   );
   assert(
-    stableVersion(manifest.pack_version),
-    "Pack version must be stable SemVer.",
+    stableVersion(manifest.pack_version) && manifest.pack_version.length <= 63,
+    "Pack version must be bounded stable SemVer.",
   );
   exactKeys(manifest.repository, ["name", "id"], "repository identity");
   assert(
@@ -133,11 +135,7 @@ export function validatePublished(manifest) {
       /^[1-9][0-9]*$/.test(manifest.repository.id),
     "Repository ID is invalid.",
   );
-  exactKeys(manifest.release, ["id", "tag", "commit"], "release identity");
-  assert(
-    Number.isSafeInteger(manifest.release.id) && manifest.release.id > 0,
-    "Release ID is invalid.",
-  );
+  exactKeys(manifest.release, ["tag", "commit"], "release identity");
   assert(
     manifest.release.tag === `v${manifest.pack_version}`,
     "Release tag and pack version differ.",
@@ -152,8 +150,8 @@ export function validatePublished(manifest) {
 
 export function validateProfiles(profiles, published) {
   const expectedIds = [
-    "source-ready-wordpress-plugin/2",
-    "source-ready-wordpress-theme/2",
+    "source-ready-wordpress-plugin/3",
+    "source-ready-wordpress-theme/3",
   ];
   exactKeys(profiles, expectedIds, "profiles");
   for (const profileId of expectedIds) {
