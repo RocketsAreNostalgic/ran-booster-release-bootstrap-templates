@@ -14,23 +14,16 @@ import {
   validateSource,
 } from "./contract.mjs";
 
-const [
-  stageArgument,
-  version,
-  repositoryId,
-  releaseIdText,
-  releaseTag,
-  releaseCommit,
-] = process.argv.slice(2);
+const [stageArgument, version, repositoryId, releaseTag, releaseCommit] =
+  process.argv.slice(2);
 assert(stageArgument, "Expected a staging directory.");
-assert(stableVersion(version), "Expected a stable SemVer pack version.");
+assert(
+  stableVersion(version) && version.length <= 63,
+  "Expected a bounded stable SemVer pack version.",
+);
 assert(
   /^[1-9][0-9]*$/.test(repositoryId ?? ""),
   "Expected a numeric repository ID.",
-);
-assert(
-  /^[1-9][0-9]*$/.test(releaseIdText ?? ""),
-  "Expected a positive release ID.",
 );
 assert(
   releaseTag === `v${version}`,
@@ -100,11 +93,10 @@ for (const [profileId, profile] of Object.entries(sourceProfiles)) {
 
 const manifest = {
   schema_version: 1,
-  consumer_api: 2,
+  consumer_api: 3,
   pack_version: version,
   repository: { name: repositoryName, id: repositoryId },
   release: {
-    id: Number(releaseIdText),
     tag: releaseTag,
     commit: releaseCommit,
   },
