@@ -4,19 +4,13 @@
   "title": "RAN Booster release bootstrap template pack",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schema_version",
-    "consumer_api",
-    "pack_version",
-    "repository",
-    "release",
-    "profiles"
-  ],
+  "required": ["schema_version", "consumer_api", "pack_version", "repository", "release", "profiles"],
   "properties": {
     "schema_version": { "const": 1 },
-    "consumer_api": { "const": 2 },
+    "consumer_api": { "const": 3 },
     "pack_version": {
       "type": "string",
+      "maxLength": 63,
       "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)$"
     },
     "repository": {
@@ -24,20 +18,18 @@
       "additionalProperties": false,
       "required": ["name", "id"],
       "properties": {
-        "name": {
-          "const": "RocketsAreNostalgic/ran-booster-release-bootstrap-templates"
-        },
+        "name": { "const": "RocketsAreNostalgic/ran-booster-release-bootstrap-templates" },
         "id": { "type": "string", "pattern": "^[1-9][0-9]*$" }
       }
     },
     "release": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "tag", "commit"],
+      "required": ["tag", "commit"],
       "properties": {
-        "id": { "type": "integer", "minimum": 1 },
         "tag": {
           "type": "string",
+          "maxLength": 64,
           "pattern": "^v(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)$"
         },
         "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
@@ -45,14 +37,11 @@
     },
     "profiles": {
       "type": "object",
-      "minProperties": 1,
-      "maxProperties": 2,
-      "additionalProperties": { "$ref": "#/$defs/profile" },
-      "propertyNames": {
-        "enum": [
-          "source-ready-wordpress-plugin/2",
-          "source-ready-wordpress-theme/2"
-        ]
+      "additionalProperties": false,
+      "required": ["source-ready-wordpress-plugin/3", "source-ready-wordpress-theme/3"],
+      "properties": {
+        "source-ready-wordpress-plugin/3": { "$ref": "#/$defs/profile" },
+        "source-ready-wordpress-theme/3": { "$ref": "#/$defs/profile" }
       }
     }
   },
@@ -66,19 +55,13 @@
         "entries": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "release-workflow",
-            "release-please-config",
-            "build-release-script",
-            "verify-release-script",
-            "upload-release-assets-script"
-          ],
+          "required": ["quality-workflow", "release-workflow", "release-please-config", "build-release-script", "verify-release-script"],
           "properties": {
+            "quality-workflow": { "$ref": "#/$defs/entry" },
             "release-workflow": { "$ref": "#/$defs/entry" },
             "release-please-config": { "$ref": "#/$defs/entry" },
             "build-release-script": { "$ref": "#/$defs/entry" },
-            "verify-release-script": { "$ref": "#/$defs/entry" },
-            "upload-release-assets-script": { "$ref": "#/$defs/entry" }
+            "verify-release-script": { "$ref": "#/$defs/entry" }
           }
         }
       }
@@ -98,15 +81,7 @@
         "placeholders": {
           "type": "object",
           "additionalProperties": {
-            "enum": [
-              "branch",
-              "github_uri",
-              "json_fragment",
-              "package_type",
-              "path",
-              "sha",
-              "slug"
-            ]
+            "enum": ["branch", "github_uri", "json_fragment", "package_type", "path", "php_version", "sha", "slug"]
           },
           "propertyNames": { "pattern": "^[A-Z][A-Z0-9_]*$" }
         }
