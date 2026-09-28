@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { validateAdvisoryIndex } from "../scripts/advisory-index.mjs";
-import { parseJson, repositoryName, validatePublished } from "../scripts/contract.mjs";
+import { parseJson, repositoryName, validatePublished, profileFiles } from "../scripts/contract.mjs";
 const encode = (x) => Buffer.from(JSON.stringify(x));
 const index = (advisories) => ({ schema: "ran-release-starter-advisories", schema_version: 1, advisories });
 const pack = { ghsa_id: "GHSA-2345-6789-cfgh", repository: repositoryName,
@@ -37,4 +37,27 @@ test("malformed, ambiguous, contradictory or over-budget indexes fail closed", (
 test("JSON decoder rejects duplicate escaped keys and invalid UTF-8", () => {
   for (const bytes of [Buffer.from('{"a":1,"\\u0061":2}'), Buffer.from('{"x":{"a":1,"a":2}}'), Buffer.from([123,34,255,34,58,49,125])]) assert.throws(() => parseJson(bytes));
   assert.deepEqual(parseJson(Buffer.from('{"x":[{"a":1},{"a":2}]}')), { x: [{ a: 1 }, { a: 2 }] });
+});
+
+test("published manifest cannot coerce identity types or grant capabilities", async () => {
+  const profiles = {};
+  for (const file of profileFiles) {
+    const profile = JSON.parse(await readFile(new URL(`../${file}`, import.meta.url), "utf8"));
+    profiles[profile.id] = { profile_version: 1, entries: Object.fromEntries(
+      Object.entries(profile.entries).map(([id, entry]) => [id, { path: entry.path, size: 1, sha256: "a".repeat(64), placeholders: entry.placeholders }]),
+    ) };
+  }
+  const manifest = { schema_version: 1, consumer_api: 3, pack_version: "0.2.1", repository: { name: repositoryName, id: "1322743261" }, release: { tag: "v0.2.1", commit: "a".repeat(40) }, profiles };
+  validatePublished(manifest);
+  for (const change of [
+    m => { m.consumer_api = 2; },
+    m => { m.release.id = 1; },
+    m => { m.release.commit = [m.release.commit]; },
+    m => { m.repository.id = 1322743261; },
+    m => { m.profiles["source-ready-wordpress-plugin/3"].entries["quality-workflow"].sha256 = ["a".repeat(64)]; },
+    m => { m.profiles["source-ready-wordpress-plugin/3"].entries["quality-workflow"].destination = ".github/workflows/evil.yml"; },
+    m => { m.profiles["source-ready-wordpress-plugin/3"].entries["quality-workflow"].path = "templates/shared/other.yml.tmpl"; },
+    m => { m.profiles["source-ready-wordpress-plugin/3"].entries["quality-workflow"].placeholders.EXTRA = "slug"; },
+    m => { m.permissions = { contents: "write" }; },
+  ]) { const changed = structuredClone(manifest); change(changed); assert.throws(() => validatePublished(changed)); }
 });

@@ -154,13 +154,14 @@ async function assertRenderedCommitArchive(renderedRoot, values) {
   await writeFile(path.join(fixture, "version.txt"), `${releaseVersion}\n`);
   await writeFile(
     path.join(fixture, "release-contents.txt"),
-    ["src/Runtime.php", values.HEADER_PATH, "README.md"].sort().join("\n") + "\n",
+    ["src/Runtime.php", values.HEADER_PATH, "README.md", ...(values.PACKAGE_TYPE === "theme" ? ["index.php"] : [])].sort().join("\n") + "\n",
   );
   await writeFile(path.join(fixture, "README.md"), "Fixture package.\n");
   await writeFile(
     path.join(source, "Runtime.php"),
     "<?php\n// committed runtime\n",
   );
+  if (values.PACKAGE_TYPE === "theme") await writeFile(path.join(fixture, "index.php"), "<?php // Fixture theme entry point.\n");
   const header =
     values.PACKAGE_TYPE === "plugin"
       ? `<?php\n/**\n * Plugin Name: Fixture package\n * Version: ${releaseVersion}\n * Update URI: ${values.UPDATE_URI}\n * Requires PHP: 8.0\n * Requires at least: 6.0\n */\n`
@@ -312,6 +313,13 @@ async function assertRenderedCommitArchive(renderedRoot, values) {
     "Rendered verifier accepted an archive from a different commit.",
   );
 
+  if (values.PACKAGE_TYPE === "theme") {
+    await assertRejectedCommittedProjection(fixture, build, releaseVersion, {
+      label: "missing theme index",
+      allowlist: ["README.md", "src/Runtime.php", "style.css"].join("\n") + "\n",
+      error: /theme requires/,
+    });
+  }
   await assertRejectedCommittedProjection(fixture, build, releaseVersion, {
     label: "missing allowlist entry",
     allowlist: "missing-file.php\n",
@@ -376,7 +384,7 @@ async function assertRejectedCommittedProjection(
   fixture,
   build,
   releaseVersion,
-  { label, allowlist, add = [] },
+  { label, allowlist, add = [], error },
 ) {
   await writeFile(path.join(fixture, "release-contents.txt"), allowlist);
   git(fixture, "add", "release-contents.txt", ...add);
@@ -388,6 +396,7 @@ async function assertRejectedCommittedProjection(
     { cwd: fixture, encoding: "utf8" },
   );
   assert.notEqual(result.status, 0, `Rendered builder accepted ${label}.`);
+  if (error) assert.match(result.stderr, error);
 }
 
 function fixtureName(logicalId) {

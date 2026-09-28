@@ -149,7 +149,7 @@ export function validatePublished(manifest) {
     "Release tag and pack version differ.",
   );
   assert(
-    /^[0-9a-f]{40}$/.test(manifest.release.commit),
+    typeof manifest.release.commit === "string" && /^[0-9a-f]{40}$/.test(manifest.release.commit),
     "Release commit is invalid.",
   );
   walkKeys(manifest);
@@ -196,7 +196,7 @@ export function validateProfiles(profiles, published) {
           `Invalid entry size: ${logicalId}`,
         );
         assert(
-          /^[0-9a-f]{64}$/.test(entry.sha256),
+          typeof entry.sha256 === "string" && /^[0-9a-f]{64}$/.test(entry.sha256),
           `Invalid entry digest: ${logicalId}`,
         );
       }

@@ -160,6 +160,11 @@ while IFS= read -r entry || [[ -n "$entry" ]]; do
 done < "$allowlist"
 [[ ${#projected[@]} -gt 0 ]] || fail 'release allowlist is empty.'
 
+if [[ "$package_kind" == theme ]]; then
+	[[ -n "${projected[index.php]+x}" || -n "${projected[templates/index.html]+x}" ]] \
+		|| fail 'theme requires an allowlisted index.php or templates/index.html.'
+fi
+
 printf 'D\t%s/\n' "$slug" > "$expected"
 while IFS=$'\t' read -r file object; do
 	printf 'F\t%s/%s\n' "$slug" "$file" >> "$expected"
