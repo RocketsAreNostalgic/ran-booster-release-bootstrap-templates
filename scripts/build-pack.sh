@@ -7,6 +7,10 @@ fail() {
 	exit 1
 }
 
+# pnpm forwards its explicit script argument separator to the shell command.
+[[ "${1:-}" != -- ]] || shift
+[[ "$#" -eq 4 ]] || fail 'expected output directory, repository ID, tag and exact source commit.'
+
 project_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 output_dir=${1:-"$project_root/dist"}
 repository_id=${2:-}

@@ -460,6 +460,8 @@ async function assertDeterministicPack() {
     sourceFixture,
     "022",
   );
+  const commandOutput = path.join(temporary, "documented-pnpm-command");
+  execFileSync("pnpm", ["run", "build", "--", commandOutput, ...arguments_], { cwd: sourceFixture, stdio: "pipe" });
   await writeFile(
     path.join(sourceFixture, "package.json"),
     `${JSON.stringify({ name: "dirty", version: "9.9.9" })}\n`,
@@ -489,6 +491,7 @@ async function assertDeterministicPack() {
   const archiveName = "ran-booster-release-bootstrap-templates.zip";
   const one = await readFile(path.join(first, archiveName));
   const two = await readFile(path.join(second, archiveName));
+  assert.ok(one.equals(await readFile(path.join(commandOutput, archiveName))), "Documented pnpm build interface changed the bytes.");
   assert.ok(
     one.equals(two),
     "Pack builds are not byte-for-byte deterministic.",
