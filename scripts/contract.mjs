@@ -15,6 +15,14 @@ export const profileFiles = [
   "profiles/source-ready-wordpress-theme-3.json",
 ];
 
+export const entryPaths = {
+  "quality-workflow": "templates/shared/quality.yml.tmpl",
+  "release-workflow": "templates/shared/release-please.yml.tmpl",
+  "release-please-config": "templates/shared/release-please-config.json.tmpl",
+  "build-release-script": "templates/shared/build-release.sh.tmpl",
+  "verify-release-script": "templates/shared/verify-release.sh.tmpl",
+};
+
 export const logicalIds = [
   "quality-workflow",
   "release-workflow",
@@ -23,7 +31,7 @@ export const logicalIds = [
   "verify-release-script",
 ];
 
-const expectedPlaceholders = {
+export const expectedPlaceholders = {
   "quality-workflow": {
     PACKAGE_SLUG: "slug",
     PHP_VERSION: "php_version",
@@ -172,7 +180,7 @@ export function validateProfiles(profiles, published) {
         logicalId,
       );
       assert(
-        validMemberPath(entry.path),
+        validMemberPath(entry.path) && entry.path === entryPaths[logicalId],
         `Unsafe pack member path: ${entry.path}`,
       );
       assert(
@@ -229,7 +237,7 @@ export function validMemberPath(member) {
 }
 
 export async function loadJson(file) {
-  return JSON.parse(await readFile(file, "utf8"));
+  return parseJson(await readFile(file));
 }
 
 export async function readRegularFile(file, label) {
@@ -243,4 +251,29 @@ export async function readRegularFile(file, label) {
     `${label} has an invalid size.`,
   );
   return readFile(file);
+}
+
+// JSON.parse alone silently accepts duplicate keys. Validate structure first, then
+// inspect the original tokens so escaped aliases cannot hide an ambiguous key.
+export function parseJson(bytes, limit = 1048576) {
+  assert(bytes.length <= limit, "JSON exceeds its byte budget.");
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  assert(!text.includes("\0"), "JSON contains NUL.");
+  const value = JSON.parse(text);
+  const tokens = text.match(/"(?:\\.|[^"\\])*"|[{}\[\]:,]|[^\s{}\[\]:,]+/g) ?? [];
+  const stack = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token === "{" || token === "[") {
+      stack.push(token === "{" ? new Set() : null);
+      assert(stack.length <= 32, "JSON nesting exceeds budget.");
+    } else if (token === "}" || token === "]") stack.pop();
+    else if (token.startsWith('"') && tokens[i + 1] === ":") {
+      const keys = stack.at(-1);
+      const key = JSON.parse(token);
+      assert(keys && !keys.has(key), "JSON contains duplicate keys.");
+      keys.add(key);
+    }
+  }
+  return value;
 }

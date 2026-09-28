@@ -46,6 +46,7 @@ jobs:
           SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
+          trap 'echo "::error::Read-only package qualification failed. Fix the exact source or inspect runner/tool availability; do not rebuild in the publisher."' ERR
           export TZ=UTC LC_ALL=C
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           version="$(git show "${SOURCE_SHA}:version.txt")"
@@ -88,3 +89,10 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 30
+
+      - name: Qualification failure guidance
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          echo 'Quality did not qualify this source. No release publication runs in this job.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Inspect build, verification and PHP syntax errors. See RELEASE-STARTER.md for no-run, permission and publication-stage guidance.' >> "$GITHUB_STEP_SUMMARY"

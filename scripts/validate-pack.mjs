@@ -53,7 +53,7 @@ for (const profile of Object.values(manifest.profiles)) {
     );
     const text = bytes.toString("utf8");
     assert(
-      Buffer.from(text, "utf8").equals(bytes),
+      Buffer.from(text, "utf8").equals(bytes) && !text.includes("\0"),
       `Entry is not valid UTF-8: ${logicalId}`,
     );
     const actualTokens = [...new Set(templateTokens(text))].sort();

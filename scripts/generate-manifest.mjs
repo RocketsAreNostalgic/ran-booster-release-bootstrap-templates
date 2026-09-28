@@ -58,7 +58,7 @@ for (const [profileId, profile] of Object.entries(sourceProfiles)) {
     );
     const text = bytes.toString("utf8");
     assert(
-      Buffer.from(text, "utf8").equals(bytes),
+      Buffer.from(text, "utf8").equals(bytes) && !text.includes("\0"),
       `Template is not valid UTF-8: ${logicalId}`,
     );
     const actualTokens = [...new Set(templateTokens(text))].sort();

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export TZ=UTC LC_ALL=C
 
 fail() {
 	printf 'build-pack: %s\n' "$*" >&2

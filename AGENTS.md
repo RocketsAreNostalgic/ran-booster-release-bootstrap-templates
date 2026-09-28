@@ -13,7 +13,7 @@ Release Deployments. It is an independent product, not a WordPress plugin.
 - Do not add executable package dependencies. Template files may become CI or
   shell code in another repository, so every change requires fixture rendering
   and review of the exact generated output.
-- Consumer API 2 is the sole forward contract. Historical Consumer API 1 packs
+- Consumer API 3 is the sole forward contract under the approved .github#81 G0 migration. Historical API 1/API 2 packs
   remain immutable evidence and are not supported setup or update authority.
   A new placeholder, logical ID, profile, manifest field, workflow trigger,
   permission, or consumer capability requires a new consumer API and a
@@ -25,7 +25,7 @@ Release Deployments. It is an independent product, not a WordPress plugin.
 
 Use the repository-declared Node 24.11.0 / pnpm 11.13.1 development toolchain
 and run `pnpm check`. It validates the source contract and real-Git
-release-candidate decisions, renders plugin and theme fixtures, checks JSON and
+exact-source archive decisions, renders plugin and theme fixtures, checks JSON and
 shell syntax, builds the pack twice, compares the bytes, and verifies the
 archive and member digests. Full checks are mandatory on every pull request,
 including Release Please pull requests.
