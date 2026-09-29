@@ -1,6 +1,7 @@
 name: Quality
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches:
@@ -36,55 +37,29 @@ jobs:
         with:
           node-version: "24.11.0"
 
-      - name: Create deterministic pre-release pack inputs
-        id: inputs
-        shell: bash
+      - name: Build and verify the final tested pack twice
         env:
           RAN_REPOSITORY_ID: ${{ github.event.repository.id }}
           RAN_SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          candidate_commit="$RAN_SOURCE_SHA"
-          test -n "$candidate_commit"
-          test "$(git rev-parse HEAD)" = "$candidate_commit"
-          version="$(git show "${candidate_commit}:package.json" | node -e 'let input=""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => process.stdout.write(JSON.parse(input).version || ""));')"
-          test -n "$version"
-          test "$(git show "${candidate_commit}:.release-please-manifest.json" | jq -er '."."')" = "$version"
-          [[ "$RAN_REPOSITORY_ID" =~ ^[1-9][0-9]*$ ]]
+          export TZ=UTC LC_ALL=C
+          test "$(git rev-parse HEAD)" = "$RAN_SOURCE_SHA"
+          version="$(node -p 'require("./package.json").version')"
+          test "$(jq -er '."."' .release-please-manifest.json)" = "$version"
+          bash scripts/build-pack.sh dist "$RAN_REPOSITORY_ID" "v$version" "$RAN_SOURCE_SHA"
+          bash scripts/build-pack.sh "$RUNNER_TEMP/pack-two" "$RAN_REPOSITORY_ID" "v$version" "$RAN_SOURCE_SHA"
+          cmp dist/ran-booster-release-bootstrap-templates.zip "$RUNNER_TEMP/pack-two/ran-booster-release-bootstrap-templates.zip"
+          bash scripts/verify-pack.sh dist/ran-booster-release-bootstrap-templates.zip "$RAN_REPOSITORY_ID" "v$version" "$RAN_SOURCE_SHA"
+          node scripts/pack-evidence.mjs dist/ran-booster-release-bootstrap-templates.zip dist
 
-          mkdir -p dist
-          inputs='dist/ran-booster-release-bootstrap-templates-inputs.tar'
-          git archive --format=tar --output="$inputs" "$candidate_commit" -- package.json profiles schema scripts src templates
-          inputs_sha256="$(sha256sum "$inputs" | awk '{ print $1 }')"
-          artifact_name="ran-booster-release-bootstrap-templates-inputs-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-
-          jq -n \
-            --arg quality_commit "$candidate_commit" \
-            --arg candidate_commit "$candidate_commit" \
-            --arg version "$version" \
-            --arg repository_id "$RAN_REPOSITORY_ID" \
-            --arg sha256 "$inputs_sha256" \
-            '{
-              schema: "ran-booster-release-bootstrap-templates-ci-inputs",
-              schema_version: 2,
-              quality_commit: $quality_commit,
-              candidate_commit: $candidate_commit,
-              version: $version,
-              repository_id: $repository_id,
-              sha256: $sha256
-            }' > dist/ran-booster-release-bootstrap-templates-ci-inputs.json
-
-          printf 'artifact-name=%s\n' "$artifact_name" >> "$GITHUB_OUTPUT"
-
-      - name: Upload the verified pre-release inputs
+      - name: Upload exact tested bytes and exchange evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ steps.inputs.outputs.artifact-name }}
-          path: |
-            dist/ran-booster-release-bootstrap-templates-inputs.tar
-            dist/ran-booster-release-bootstrap-templates-ci-inputs.json
+          name: ran-booster-release-bootstrap-templates-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/*
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
   baseline:
     name: Shared Node quality

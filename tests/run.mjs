@@ -28,7 +28,6 @@ const temporary = await mkdtemp(
 const { version } = await loadJson(path.join(root, "package.json"));
 const identity = {
   repositoryId: "987654321",
-  releaseId: "41",
   tag: `v${version}`,
 };
 const testCrcTable = Array.from({ length: 256 }, (_, value) => {
@@ -42,7 +41,7 @@ try {
   const schema = await loadJson(
     path.join(root, "schema/template-pack.schema.json"),
   );
-  assert.equal(schema.properties.consumer_api.const, 2);
+  assert.equal(schema.properties.consumer_api.const, 3);
   assert.equal(schema.additionalProperties, false);
 
   const source = await loadJson(
@@ -58,383 +57,12 @@ try {
     ]),
   );
   validateSource(source, profiles);
-  await assertRepositoryWorkflows();
-  await assertReleaseCandidateDecisions();
-  await assertPublisherReleaseOutcomes();
   await renderFixtures(profiles);
   await assertDeterministicPack();
   await assertTamperFails();
-  process.stdout.write("All Consumer API 2 template-pack tests passed.\n");
+  process.stdout.write("All Consumer API 3 template-pack tests passed.\n");
 } finally {
   await rm(temporary, { recursive: true, force: true });
-}
-
-async function assertRepositoryWorkflows() {
-  const quality = await readFile(
-    path.join(root, ".github/workflows/quality.yml"),
-    "utf8",
-  );
-  const release = await readFile(
-    path.join(root, ".github/workflows/release-please.yml"),
-    "utf8",
-  );
-  const releaseCandidate = await readFile(
-    path.join(root, "scripts/release-candidate.mjs"),
-    "utf8",
-  );
-
-  for (const workflow of [quality, release]) {
-    const actions = [...workflow.matchAll(/^\s+(?:- )?uses: (\S+)/gm)].map(
-      (match) => match[1],
-    );
-    assert.ok(actions.length > 0);
-    for (const action of actions)
-      assert.match(action, /^[^@]+@[0-9a-f]{40}$/, action);
-  }
-
-  assert.match(quality, /actions\/upload-artifact@[0-9a-f]{40}/);
-  assert.match(quality, /git archive --format=tar/);
-  assert.doesNotMatch(quality, /release-candidate/);
-  assert.doesNotMatch(quality, /^\s+if:.*release-candidate/m);
-  assert.match(quality, /candidate_commit: \$candidate_commit/);
-  assert.match(release, /^\s+workflow_run:/m);
-  assert.doesNotMatch(release, /^  workflow_dispatch:/m);
-  assert.match(release, /actions\/runs\/\$\{RAN_QUALITY_RUN_ID\}/);
-  assert.match(release, /\.workflow_id == 326857969/);
-  assert.match(release, /\.name == "Quality"/);
-  assert.match(release, /\.path == "\.github\/workflows\/quality\.yml"/);
-  assert.match(release, /\.event == "push"/);
-  assert.match(release, /\.conclusion == "success"/);
-  assert.match(release, /workflow_run\.conclusion == 'success'/);
-  assert.match(release, /workflow_run\.head_repository\.full_name/);
-  assert.match(release, /steps\.quality\.outputs\.commit/);
-  assert.match(release, /actions\/download-artifact@[0-9a-f]{40}/);
-  assert.match(release, /run-id: \$\{\{ steps\.quality\.outputs\.run_id \}\}/);
-  assert.match(release, /scripts\/release-candidate\.mjs/);
-  assert.match(release, /upload-pack\.sh inspect-created/);
-  assert.match(release, /printf 'PACK_COMMIT=%s/);
-  assert.match(release, /"\$RAN_QUALITY_COMMIT"/);
-  assert.match(release, /candidate_commit == \$candidate_commit/);
-  assert.match(releaseCandidate, /base\?\.sha === baseCommit/);
-  assert.match(release, /test "\$pending" = true/);
-  for (const [field, expected] of [
-    ["pending", "true"],
-    ["tagged", "false"],
-  ]) {
-    const filter = release.match(
-      new RegExp(`${field}="\\$\\(jq -r '([^']+)' <<< "\\$decision"\\)"`),
-    )?.[1];
-    assert.ok(filter, `${field} must use a false-safe typed jq reader.`);
-    const readback = spawnSync("jq", ["-r", filter], {
-      encoding: "utf8",
-      input: JSON.stringify({ pending: true, tagged: false }),
-    });
-    assert.equal(readback.status, 0, readback.stderr);
-    assert.equal(readback.stdout.trim(), expected);
-  }
-  assert.equal(
-    (release.match(/bash scripts\/build-pack\.sh/g) ?? []).length,
-    1,
-  );
-  assert.match(
-    release,
-    /git archive --format=tar --output="\$expected" "\$PACK_COMMIT"/,
-  );
-  assert.match(release, /cmp -s "\$inputs" "\$expected"/);
-  assert.doesNotMatch(release, /^\s+publish-pack:/m);
-}
-
-async function assertReleaseCandidateDecisions() {
-  const fixture = await createReleaseFixture("eligible");
-  const pullRequest = eligiblePullRequest(fixture);
-  const decision = runReleaseCandidate(fixture, [[pullRequest]]);
-  assert.equal(decision.candidate, fixture.candidate);
-  assert.equal(decision.release_head, fixture.releaseHead);
-  assert.equal(decision.release_pr_number, 17);
-  assert.equal(decision.pending, true);
-  assert.equal(decision.tagged, false);
-  assert.equal(decision.tag, "v0.3.0");
-  const taggedDecision = runReleaseCandidate(fixture, [
-    [{ ...pullRequest, labels: [{ name: "autorelease: tagged" }] }],
-  ]);
-  assert.equal(taggedDecision.pending, false);
-  assert.equal(taggedDecision.tagged, true);
-
-  const correctedChangelog = await createReleaseFixture("corrected-changelog", {
-    postManifestPath: "CHANGELOG.md",
-  });
-  assert.equal(
-    runReleaseCandidate(correctedChangelog, [
-      eligiblePullRequest(correctedChangelog),
-    ]).release_head,
-    correctedChangelog.releaseHead,
-  );
-  const unsafePostManifest = await createReleaseFixture(
-    "unsafe-post-manifest",
-    { postManifestPath: "release-notes.txt" },
-  );
-  assert.notEqual(
-    runReleaseCandidate(
-      unsafePostManifest,
-      [eligiblePullRequest(unsafePostManifest)],
-      false,
-    ).status,
-    0,
-    "A post-manifest payload change passed as a changelog correction.",
-  );
-  const lateManifestOwner = await createReleaseFixture("late-manifest-owner", {
-    preManifestCommit: true,
-  });
-  assert.notEqual(
-    runReleaseCandidate(
-      lateManifestOwner,
-      [eligiblePullRequest(lateManifestOwner)],
-      false,
-    ).status,
-    0,
-    "A manifest owner that was not the first child of the PR base passed.",
-  );
-  const manifestOwnerPayload = await createReleaseFixture(
-    "manifest-owner-payload",
-    { ownerExtraPath: "release-notes.txt" },
-  );
-  assert.notEqual(
-    runReleaseCandidate(
-      manifestOwnerPayload,
-      [eligiblePullRequest(manifestOwnerPayload)],
-      false,
-    ).status,
-    0,
-    "A manifest owner with an extra release payload path passed.",
-  );
-
-  const rejectedPullRequests = [
-    ["missing", []],
-    ["ambiguous", [[pullRequest], [{ ...pullRequest, number: 18 }]]],
-    [
-      "wrong base",
-      [{ ...pullRequest, base: { ...pullRequest.base, ref: "develop" } }],
-    ],
-    [
-      "wrong base SHA",
-      [
-        {
-          ...pullRequest,
-          base: { ...pullRequest.base, sha: "e".repeat(40) },
-        },
-      ],
-    ],
-    [
-      "wrong head",
-      [{ ...pullRequest, head: { ...pullRequest.head, sha: fixture.base } }],
-    ],
-    ["wrong merge", [{ ...pullRequest, merge_commit_sha: fixture.base }]],
-    [
-      "wrong repository",
-      [
-        {
-          ...pullRequest,
-          head: {
-            ...pullRequest.head,
-            repo: { full_name: "attacker/fork" },
-          },
-        },
-      ],
-    ],
-    ["wrong author", [{ ...pullRequest, user: { login: "untrusted-user" } }]],
-    ["unmerged", [{ ...pullRequest, merged_at: null }]],
-    ["missing lifecycle", [{ ...pullRequest, labels: [] }]],
-    [
-      "conflicting lifecycle",
-      [
-        {
-          ...pullRequest,
-          labels: [
-            { name: "autorelease: pending" },
-            { name: "autorelease: tagged" },
-          ],
-        },
-      ],
-    ],
-  ];
-  for (const [label, pullRequests] of rejectedPullRequests) {
-    const result = runReleaseCandidate(fixture, pullRequests, false);
-    assert.notEqual(result.status, 0, `${label} candidate evidence passed.`);
-  }
-
-  const oneParent = { ...fixture, candidate: fixture.releaseHead };
-  git(fixture.directory, "checkout", "--detach", fixture.releaseHead);
-  assert.notEqual(
-    runReleaseCandidate(oneParent, [pullRequest], false).status,
-    0,
-    "A one-parent release head passed as the green merge candidate.",
-  );
-
-  const differentTree = await createReleaseFixture("different-tree", {
-    differentTree: true,
-  });
-  assert.notEqual(
-    runReleaseCandidate(
-      differentTree,
-      [eligiblePullRequest(differentTree)],
-      false,
-    ).status,
-    0,
-    "A merge with bytes absent from the Release Please head passed.",
-  );
-
-  const noManifest = await createReleaseFixture("no-manifest", {
-    changeManifest: false,
-  });
-  assert.notEqual(
-    runReleaseCandidate(noManifest, [eligiblePullRequest(noManifest)], false)
-      .status,
-    0,
-    "A merge without a Release Please manifest change passed.",
-  );
-}
-
-async function createReleaseFixture(
-  name,
-  {
-    changeManifest = true,
-    differentTree = false,
-    ownerExtraPath = "",
-    postManifestPath = "",
-    preManifestCommit = false,
-  } = {},
-) {
-  const directory = path.join(temporary, `release-candidate-${name}`);
-  const expectedHead =
-    "release-please--branches--main--components--ran-booster-release-bootstrap-templates";
-  await mkdir(directory, { recursive: true });
-  git(directory, "init", "-b", "main");
-  git(directory, "config", "user.email", "fixture@example.test");
-  git(directory, "config", "user.name", "Fixture");
-  await writeFile(
-    path.join(directory, "package.json"),
-    `${JSON.stringify({ version: "0.2.0" })}\n`,
-  );
-  await writeFile(
-    path.join(directory, ".release-please-manifest.json"),
-    `${JSON.stringify({ ".": "0.2.0" })}\n`,
-  );
-  await writeFile(path.join(directory, "CHANGELOG.md"), "# Changelog\n");
-  git(directory, "add", ".");
-  git(directory, "commit", "-m", "chore: fixture base");
-  git(directory, "checkout", "-b", expectedHead);
-  if (preManifestCommit) {
-    await writeFile(
-      path.join(directory, "CHANGELOG.md"),
-      "Release preparation.\n\n# Changelog\n",
-    );
-    git(directory, "add", "CHANGELOG.md");
-    git(directory, "commit", "-m", "docs: prepare release notes");
-  }
-  if (changeManifest) {
-    await writeFile(
-      path.join(directory, "package.json"),
-      `${JSON.stringify({ version: "0.3.0" })}\n`,
-    );
-    await writeFile(
-      path.join(directory, ".release-please-manifest.json"),
-      `${JSON.stringify({ ".": "0.3.0" })}\n`,
-    );
-    await writeFile(
-      path.join(directory, "CHANGELOG.md"),
-      "## 0.3.0\n\nRelease fixture.\n\n# Changelog\n",
-    );
-    if (ownerExtraPath) {
-      await writeFile(path.join(directory, ownerExtraPath), "Unexpected.\n");
-    }
-  } else {
-    await writeFile(path.join(directory, "release-notes.txt"), "No version.\n");
-  }
-  git(directory, "add", ".");
-  git(directory, "commit", "-m", "chore(main): release fixture");
-  if (postManifestPath) {
-    await writeFile(
-      path.join(directory, postManifestPath),
-      "Audited release correction.\n",
-    );
-    git(directory, "add", postManifestPath);
-    git(directory, "commit", "-m", "docs: correct release notes");
-  }
-  const releaseHead = git(directory, "rev-parse", "HEAD");
-
-  git(directory, "checkout", "main");
-  if (differentTree) {
-    await writeFile(path.join(directory, "main-only.txt"), "main movement\n");
-    git(directory, "add", "main-only.txt");
-    git(directory, "commit", "-m", "fix: concurrent main change");
-  }
-  git(directory, "merge", "--no-ff", expectedHead, "-m", "Merge release PR");
-  const candidate = git(directory, "rev-parse", "HEAD");
-  return {
-    base: git(directory, "rev-parse", `${candidate}^1`),
-    candidate,
-    directory,
-    expectedHead,
-    releaseHead,
-  };
-}
-
-function eligiblePullRequest(fixture) {
-  return {
-    number: 17,
-    merged_at: "2026-08-10T10:00:00Z",
-    base: {
-      ref: "main",
-      sha: fixture.base,
-      repo: {
-        full_name:
-          "RocketsAreNostalgic/ran-booster-release-bootstrap-templates",
-      },
-    },
-    head: {
-      ref: fixture.expectedHead,
-      repo: {
-        full_name:
-          "RocketsAreNostalgic/ran-booster-release-bootstrap-templates",
-      },
-      sha: fixture.releaseHead,
-    },
-    labels: [{ name: "autorelease: pending" }],
-    merge_commit_sha: fixture.candidate,
-    user: { login: "github-actions[bot]" },
-  };
-}
-
-function runReleaseCandidate(
-  fixture,
-  pullRequests,
-  successful = true,
-  environment = {},
-) {
-  const pullRequestsFile = path.join(fixture.directory, "pull-requests.json");
-  writeFileSync(pullRequestsFile, JSON.stringify(pullRequests));
-  const arguments_ = [
-    path.join(root, "scripts/release-candidate.mjs"),
-    fixture.candidate,
-    "RocketsAreNostalgic/ran-booster-release-bootstrap-templates",
-    "main",
-    fixture.expectedHead,
-    pullRequestsFile,
-  ];
-  if (!successful)
-    return spawnSync(process.execPath, arguments_, {
-      cwd: fixture.directory,
-      encoding: "utf8",
-      env: { ...process.env, ...environment },
-    });
-  return JSON.parse(
-    execFileSync(process.execPath, arguments_, {
-      cwd: fixture.directory,
-      encoding: "utf8",
-      env: { ...process.env, ...environment },
-      stdio: ["ignore", "pipe", "pipe"],
-    }),
-  );
 }
 
 function git(directory, ...arguments_) {
@@ -443,347 +71,6 @@ function git(directory, ...arguments_) {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
-}
-
-async function assertPublisherReleaseOutcomes() {
-  const harness = path.join(temporary, "publisher-harness");
-  const bin = path.join(harness, "bin");
-  await mkdir(bin, { recursive: true });
-  const fakeGh = path.join(bin, "gh");
-  await writeFile(
-    fakeGh,
-    `#!/bin/sh\nexec "${process.execPath}" "${path.join(root, "tests/fake-gh.mjs")}" "$@"\n`,
-  );
-  await chmod(fakeGh, 0o755);
-
-  const publishers = [
-    {
-      archive: "ran-booster-release-bootstrap-templates.zip",
-      branchEnvironment: {},
-      prerelease: false,
-      script: path.join(root, "scripts/upload-pack.sh"),
-      tag: "v0.3.0",
-    },
-    {
-      archive: "example-package-1.2.3-beta.1.zip",
-      branchEnvironment: { RAN_RELEASE_BRANCH: "main" },
-      prerelease: true,
-      script: path.join(root, "templates/shared/upload-release-assets.sh.tmpl"),
-      tag: "v1.2.3-beta.1",
-    },
-  ];
-
-  for (const [publisherIndex, publisher] of publishers.entries()) {
-    const publisherRoot = path.join(harness, `publisher-${publisherIndex}`);
-    await mkdir(publisherRoot, { recursive: true });
-    const archive = path.join(publisherRoot, publisher.archive);
-    const remote = path.join(publisherRoot, "remote.zip");
-    const candidate = "1234567890abcdef1234567890abcdef12345678";
-    await writeFile(archive, `candidate-${publisherIndex}\n`);
-    const archiveBytes = await readFile(archive);
-    const asset = releaseAsset(publisher.archive, archiveBytes);
-    const base = {
-      branch_sha: candidate,
-      calls: [],
-      release: null,
-      remote_asset: remote,
-      tag: null,
-    };
-    const release = releaseRecord({
-      assets: [],
-      candidate,
-      prerelease: publisher.prerelease,
-      tag: publisher.tag,
-    });
-    const inspect = [
-      "inspect",
-      publisher.tag,
-      candidate,
-      String(publisher.prerelease),
-    ];
-    const verify = (mode) => [
-      "verify",
-      publisher.tag,
-      archive,
-      "41",
-      candidate,
-      String(publisher.prerelease),
-      mode,
-    ];
-
-    const absent = runPublisher(publisher, inspect, base, bin, publisherRoot);
-    assert.equal(JSON.parse(absent.stdout).state, "absent");
-    assertPublisherFails(
-      publisher,
-      inspect,
-      { ...base, branch_sha: "a".repeat(40) },
-      bin,
-      publisherRoot,
-      "main movement",
-    );
-    assertPublisherFails(
-      publisher,
-      inspect,
-      { ...base, tag: { sha: candidate } },
-      bin,
-      publisherRoot,
-      "preexisting tag",
-    );
-
-    const exactDraft = { ...base, release };
-    const draft = runPublisher(
-      publisher,
-      inspect,
-      exactDraft,
-      bin,
-      publisherRoot,
-    );
-    assert.equal(JSON.parse(draft.stdout).state, "draft");
-    const delayedDraft = runPublisher(
-      publisher,
-      [
-        "inspect-created",
-        publisher.tag,
-        candidate,
-        String(publisher.prerelease),
-      ],
-      { ...exactDraft, release_inventory_lag: 2 },
-      bin,
-      publisherRoot,
-    );
-    assert.equal(JSON.parse(delayedDraft.stdout).state, "draft");
-    assertPublisherFails(
-      publisher,
-      [
-        "inspect-created",
-        publisher.tag,
-        candidate,
-        String(publisher.prerelease),
-      ],
-      { ...exactDraft, release_inventory_lag: 4 },
-      bin,
-      publisherRoot,
-      "draft inventory exceeds bounded discovery",
-    );
-    assertPublisherFails(
-      publisher,
-      inspect,
-      {
-        ...base,
-        release_pages: [[release], [{ ...release, id: 42 }]],
-      },
-      bin,
-      publisherRoot,
-      "duplicate paginated drafts",
-    );
-    assertPublisherFails(
-      publisher,
-      inspect,
-      {
-        ...base,
-        release: { ...release, draft: false, immutable: true },
-        release_tag_404: true,
-        tag: { sha: candidate },
-      },
-      bin,
-      publisherRoot,
-      "published release missing tag lookup",
-    );
-    assertPublisherFails(
-      publisher,
-      inspect,
-      { ...base, release_tag_error: true },
-      bin,
-      publisherRoot,
-      "non-404 release lookup failure",
-    );
-    for (const [label, invalidRelease] of [
-      ["wrong target", { ...release, target_commitish: "b".repeat(40) }],
-      ["wrong release ID", { ...release, id: 0 }],
-      ["wrong prerelease", { ...release, prerelease: !publisher.prerelease }],
-      ["mutable publication", { ...release, draft: false, immutable: false }],
-    ]) {
-      assertPublisherFails(
-        publisher,
-        inspect,
-        { ...base, release: invalidRelease },
-        bin,
-        publisherRoot,
-        label,
-      );
-    }
-
-    const pending = runPublisher(
-      publisher,
-      verify("pending"),
-      exactDraft,
-      bin,
-      publisherRoot,
-    );
-    assert.deepEqual(pending.state.calls, ["upload", "download"]);
-    assert.deepEqual(pending.state.release.assets, [asset]);
-
-    await writeFile(remote, archiveBytes);
-    const exactAssetDraft = {
-      ...base,
-      release: { ...release, assets: [asset] },
-    };
-    const draftRetry = runPublisher(
-      publisher,
-      verify("pending"),
-      exactAssetDraft,
-      bin,
-      publisherRoot,
-    );
-    assert.deepEqual(draftRetry.state.calls, ["download"]);
-
-    const publishedRelease = {
-      ...release,
-      assets: [asset],
-      draft: false,
-      immutable: true,
-    };
-    const lostAcknowledgement = {
-      ...base,
-      branch_sha: "c".repeat(40),
-      release: publishedRelease,
-      tag: { sha: candidate },
-    };
-    const published = runPublisher(
-      publisher,
-      verify("published"),
-      lostAcknowledgement,
-      bin,
-      publisherRoot,
-    );
-    assert.deepEqual(published.state.calls, ["download"]);
-    assert.equal(published.state.calls.includes("upload"), false);
-
-    for (const [label, invalidAssets] of [
-      ["missing asset", []],
-      ["extra asset", [asset, { ...asset, id: 902, name: "extra.zip" }]],
-      ["wrong asset name", [{ ...asset, name: "wrong.zip" }]],
-      ["wrong asset size", [{ ...asset, size: asset.size + 1 }]],
-      ["wrong asset state", [{ ...asset, state: "new" }]],
-      [
-        "wrong asset digest",
-        [{ ...asset, digest: `sha256:${"0".repeat(64)}` }],
-      ],
-    ]) {
-      assertPublisherFails(
-        publisher,
-        verify("published"),
-        {
-          ...lostAcknowledgement,
-          release: { ...publishedRelease, assets: invalidAssets },
-        },
-        bin,
-        publisherRoot,
-        label,
-      );
-    }
-    assertPublisherFails(
-      publisher,
-      inspect,
-      {
-        ...lostAcknowledgement,
-        tag: { sha: "d".repeat(40) },
-      },
-      bin,
-      publisherRoot,
-      "wrong published tag target",
-    );
-
-    await writeFile(remote, "different bytes\n");
-    assertPublisherFails(
-      publisher,
-      verify("published"),
-      lostAcknowledgement,
-      bin,
-      publisherRoot,
-      "mismatched downloaded bytes",
-    );
-  }
-}
-
-function runPublisher(publisher, arguments_, state, bin, directory) {
-  const stateFile = path.join(directory, "fake-gh-state.json");
-  writeFileSync(stateFile, `${JSON.stringify(structuredClone(state))}\n`);
-  const result = spawnSync("bash", [publisher.script, ...arguments_], {
-    cwd: directory,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      ...publisher.branchEnvironment,
-      GITHUB_REPOSITORY:
-        "RocketsAreNostalgic/ran-booster-release-bootstrap-templates",
-      PATH: `${bin}:${process.env.PATH}`,
-      RAN_FAKE_GH_STATE: stateFile,
-      RAN_RELEASE_DISCOVERY_DELAYS: "0 0 0",
-      RAN_RELEASE_READBACK_DELAYS: "0",
-    },
-  });
-  assert.equal(result.status, 0, result.stderr);
-  return {
-    ...result,
-    state: JSON.parse(readFileSync(stateFile, "utf8")),
-  };
-}
-
-function assertPublisherFails(
-  publisher,
-  arguments_,
-  state,
-  bin,
-  directory,
-  label,
-) {
-  const stateFile = path.join(directory, `fake-gh-state-${label}.json`);
-  writeFileSync(stateFile, `${JSON.stringify(structuredClone(state))}\n`);
-  const result = spawnSync("bash", [publisher.script, ...arguments_], {
-    cwd: directory,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      ...publisher.branchEnvironment,
-      GITHUB_REPOSITORY:
-        "RocketsAreNostalgic/ran-booster-release-bootstrap-templates",
-      PATH: `${bin}:${process.env.PATH}`,
-      RAN_FAKE_GH_STATE: stateFile,
-      RAN_RELEASE_DISCOVERY_DELAYS: "0 0 0",
-      RAN_RELEASE_READBACK_DELAYS: "0",
-    },
-  });
-  assert.notEqual(result.status, 0, `${label} unexpectedly passed.`);
-  const finalState = JSON.parse(readFileSync(stateFile, "utf8"));
-  assert.equal(
-    finalState.calls.includes("upload"),
-    false,
-    `${label} performed an unsafe upload.`,
-  );
-}
-
-function releaseRecord({ assets, candidate, prerelease, tag }) {
-  return {
-    id: 41,
-    tag_name: tag,
-    target_commitish: candidate,
-    draft: true,
-    immutable: false,
-    prerelease,
-    assets,
-  };
-}
-
-function releaseAsset(name, bytes) {
-  return {
-    id: 901,
-    name,
-    size: bytes.length,
-    state: "uploaded",
-    content_type: "application/zip",
-    digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
-  };
 }
 
 async function renderFixtures(profiles) {
@@ -844,12 +131,14 @@ async function assertRenderedCommitArchive(renderedRoot, values) {
   );
   const scripts = path.join(fixture, "scripts");
   const source = path.join(fixture, "src");
+  const assets = path.join(fixture, "assets");
   const cleanOutput = path.join(fixture, "clean-output");
   const dirtyOutput = path.join(fixture, "dirty-output");
   const changedOutput = path.join(fixture, "changed-output");
   const releaseVersion = "1.2.3";
   await mkdir(scripts, { recursive: true });
   await mkdir(source, { recursive: true });
+  await mkdir(assets, { recursive: true });
   await cp(
     path.join(renderedRoot, "build-release.sh"),
     path.join(scripts, "build-release.sh"),
@@ -867,17 +156,19 @@ async function assertRenderedCommitArchive(renderedRoot, values) {
   await writeFile(path.join(fixture, "version.txt"), `${releaseVersion}\n`);
   await writeFile(
     path.join(fixture, "release-contents.txt"),
-    `src/\n${values.HEADER_PATH}\nREADME.md\n`,
+    ["src/Runtime.php", "assets/repeated.txt", values.HEADER_PATH, "README.md", ...(values.PACKAGE_TYPE === "theme" ? ["index.php"] : [])].sort().join("\n") + "\n",
   );
   await writeFile(path.join(fixture, "README.md"), "Fixture package.\n");
+  await writeFile(path.join(assets, "repeated.txt"), "A".repeat(100000));
   await writeFile(
     path.join(source, "Runtime.php"),
     "<?php\n// committed runtime\n",
   );
+  if (values.PACKAGE_TYPE === "theme") await writeFile(path.join(fixture, "index.php"), "<?php // Fixture theme entry point.\n");
   const header =
     values.PACKAGE_TYPE === "plugin"
-      ? `<?php\n/**\n * Plugin Name: Fixture package\n * Version: ${releaseVersion}\n * Update URI: ${values.UPDATE_URI}\n */\n`
-      : `/*\nTheme Name: Fixture package\nVersion: ${releaseVersion}\nUpdate URI: ${values.UPDATE_URI}\n*/\n`;
+      ? `<?php\n/**\n * Plugin Name: Fixture package\n * Version: ${releaseVersion}\n * Update URI: ${values.UPDATE_URI}\n * Requires PHP: 8.0\n * Requires at least: 6.0\n */\n`
+      : `/*\nTheme Name: Fixture package\nVersion: ${releaseVersion}\nUpdate URI: ${values.UPDATE_URI}\nRequires PHP: 8.0\nRequires at least: 6.0\n*/\n`;
   await writeFile(path.join(fixture, values.HEADER_PATH), header);
 
   git(fixture, "init", "-b", "main");
@@ -898,6 +189,7 @@ async function assertRenderedCommitArchive(renderedRoot, values) {
   const archiveName = `${values.PACKAGE_SLUG}-${releaseVersion}.zip`;
   const cleanArchive = path.join(cleanOutput, archiveName);
   const cleanBytes = await readFile(cleanArchive);
+  assert.match(execFileSync("unzip", ["-lv", cleanArchive], { encoding: "utf8" }), /100000\s+Stored\s+100000\s+0%[^\n]*assets\/repeated\.txt/, "Highly compressible runtime member must be stored.");
   if (values.PACKAGE_TYPE === "plugin") {
     await assertHostileArchiveMatrix({
       label: "rendered release",
@@ -914,6 +206,37 @@ async function assertRenderedCommitArchive(renderedRoot, values) {
         }),
     });
   }
+
+  const qualityText = await readFile(path.join(renderedRoot, "quality.yml"), "utf8");
+  const qualityBlock = qualityText.split("      - name: Build and check the exact installable package")[1]
+    .split("        run: |\n")[1].split("\n      - uses:")[0]
+    .split("\n").map(line => line.startsWith("          ") ? line.slice(10) : line).join("\n");
+  const runQuality = (sha) => spawnSync("bash", ["-c", qualityBlock], {
+    cwd: fixture, encoding: "utf8", env: { ...process.env, SOURCE_SHA: sha, GITHUB_REPOSITORY: "example/example-package" },
+  });
+  const qualityResult = runQuality(commit);
+  assert.equal(qualityResult.status, 0, qualityResult.stderr);
+  git(fixture, "restore", ".");
+  await writeFile(path.join(fixture, values.HEADER_PATH), header.replace("Requires PHP: 8.0", "Requires PHP: 8.1"));
+  git(fixture, "add", values.HEADER_PATH);
+  git(fixture, "commit", "-m", "test: advertised minimum PHP differs from Quality");
+  const mismatchedQuality = runQuality(git(fixture, "rev-parse", "HEAD"));
+  assert.notEqual(mismatchedQuality.status, 0);
+  assert.match(mismatchedQuality.stdout + mismatchedQuality.stderr, /Requires PHP does not match/);
+  git(fixture, "reset", "--hard", commit);
+  const promotion = await loadJson(path.join(fixture, ".ran-booster-release-dist/ran-profile-b-promotion.json"));
+  assert.equal(promotion.source_commit, commit);
+  assert.equal(promotion.quality_commit, commit);
+  assert.equal(promotion.assets[0].sha256, createHash("sha256").update(cleanBytes).digest("hex"));
+  await rm(path.join(fixture, ".ran-booster-release-dist"), { recursive: true });
+  await writeFile(path.join(source, "Runtime.php"), "<?php this is not valid PHP;\n");
+  git(fixture, "add", "src/Runtime.php");
+  git(fixture, "commit", "-m", "test: invalid payload syntax");
+  const syntaxFailure = runQuality(git(fixture, "rev-parse", "HEAD"));
+  assert.notEqual(syntaxFailure.status, 0);
+  assert.match(syntaxFailure.stdout + syntaxFailure.stderr, /Parse error|syntax error/);
+  assert.match(syntaxFailure.stdout + syntaxFailure.stderr, /Read-only package qualification failed/);
+  git(fixture, "reset", "--hard", commit);
 
   await writeFile(path.join(fixture, "release-contents.txt"), "../unsafe\n");
   await writeFile(
@@ -950,6 +273,56 @@ async function assertRenderedCommitArchive(renderedRoot, values) {
     "Rendered builder accepted an omitted release commit.",
   );
 
+  for (const [label, content] of [
+    ["lfs", "version https://git-lfs.github.com/spec/v1\noid sha256:" + "a".repeat(64) + "\nsize 100\n"],
+  ]) {
+    git(fixture, "restore", ".");
+    await writeFile(path.join(source, "Runtime.php"), content);
+    git(fixture, "add", "src/Runtime.php");
+    git(fixture, "commit", "-m", `test: ${label} rejection`);
+    const result = spawnSync("bash", [build, git(fixture, "rev-parse", "HEAD"), releaseVersion, path.join(fixture, label)], { cwd: fixture, encoding: "utf8" });
+    assert.notEqual(result.status, 0); assert.match(result.stderr, /LFS pointer/);
+    git(fixture, "reset", "--hard", commit);
+  }
+  for (const [label, changedHeader, error] of [
+    ["wrong-uri", header.replace(values.UPDATE_URI, values.UPDATE_URI + "-wrong"), /Update URI/],
+    ["wrong-php", header.replace("Requires PHP: 8.0", "Requires PHP: 9.0"), /Requires PHP/],
+    ["wrong-wp", header.replace("Requires at least: 6.0", "Requires at least: invalid"), /Requires at least/],
+    ["wrong-version", header.replace(releaseVersion, "1.2.4"), /version/],
+    ["version-trailing-text", header.replace(`Version: ${releaseVersion}`, `Version: ${releaseVersion} unexpected`), /version/i],
+    ["php-trailing-text", header.replace("Requires PHP: 8.0", "Requires PHP: 8.0 unexpected"), /Requires PHP/],
+    ["wp-trailing-text", header.replace("Requires at least: 6.0", "Requires at least: 6.0 unexpected"), /Requires at least/],
+  ]) {
+    git(fixture, "restore", ".");
+    await writeFile(path.join(fixture, values.HEADER_PATH), changedHeader);
+    git(fixture, "add", values.HEADER_PATH);
+    git(fixture, "commit", "-m", `test: ${label} rejection`);
+    const result = spawnSync("bash", [build, git(fixture, "rev-parse", "HEAD"), releaseVersion, path.join(fixture, label)], { cwd: fixture, encoding: "utf8" });
+    assert.notEqual(result.status, 0); assert.match(result.stderr, error);
+    const stagedRoot = path.join(fixture, `${label}-stage`);
+    const candidate = path.join(fixture, `${label}-candidate.zip`);
+    await mkdir(path.join(stagedRoot, values.PACKAGE_SLUG), { recursive: true });
+    await writeFile(path.join(stagedRoot, values.PACKAGE_SLUG, values.HEADER_PATH), changedHeader);
+    await cp(cleanArchive, candidate);
+    execFileSync("zip", ["-0", "-X", "-q", candidate, `${values.PACKAGE_SLUG}/${values.HEADER_PATH}`], { cwd: stagedRoot });
+    const verification = spawnSync("bash", [verify, candidate, releaseVersion, git(fixture, "rev-parse", "HEAD")], { cwd: fixture, encoding: "utf8" });
+    assert.notEqual(verification.status, 0); assert.match(verification.stderr, error);
+    await rm(stagedRoot, { recursive: true });
+    await rm(candidate);
+    git(fixture, "reset", "--hard", commit);
+  }
+  for (const [label, content] of [
+    ["version-internal-space", "1 .2.3\n"],
+    ["version-extra-line", "1.2.3\n\n"],
+  ]) {
+    git(fixture, "restore", ".");
+    await writeFile(path.join(fixture, "version.txt"), content);
+    git(fixture, "add", "version.txt");
+    git(fixture, "commit", "-m", `test: ${label} rejection`);
+    const result = spawnSync("bash", [build, git(fixture, "rev-parse", "HEAD"), releaseVersion, path.join(fixture, label)], { cwd: fixture, encoding: "utf8" });
+    assert.notEqual(result.status, 0); assert.match(result.stderr, /version\.txt/);
+    git(fixture, "reset", "--hard", commit);
+  }
   git(fixture, "restore", ".");
   await rm(path.join(source, "untracked.php"));
   await writeFile(
@@ -977,6 +350,35 @@ async function assertRenderedCommitArchive(renderedRoot, values) {
     "Rendered verifier accepted an archive from a different commit.",
   );
 
+  if (values.PACKAGE_TYPE === "theme") {
+    git(fixture, "restore", ".");
+    await rm(path.join(fixture, "index.php"));
+    await mkdir(path.join(fixture, "templates"), { recursive: true });
+    await writeFile(path.join(fixture, "templates/index.html"), "<!-- wp:post-content /-->\n");
+    await writeFile(path.join(fixture, "theme.json"), "{}\n");
+    await writeFile(path.join(fixture, "release-contents.txt"), ["README.md", "assets/repeated.txt", "src/Runtime.php", "style.css", "templates/index.html", "theme.json"].sort().join("\n") + "\n");
+    git(fixture, "add", "-A");
+    git(fixture, "commit", "-m", "test: block theme runtime layout");
+    const blockCommit = git(fixture, "rev-parse", "HEAD");
+    const blockOutput = path.join(fixture, "block-output");
+    execFileSync("bash", [build, blockCommit, releaseVersion, blockOutput], { cwd: fixture, stdio: "pipe" });
+    const blockArchive = path.join(blockOutput, archiveName);
+    execFileSync("bash", [verify, blockArchive, releaseVersion, blockCommit], { cwd: fixture, stdio: "pipe" });
+    const blockMembers = execFileSync("unzip", ["-Z1", blockArchive], { encoding: "utf8" });
+    assert.match(blockMembers, /templates\/index\.html/);
+    assert.doesNotMatch(blockMembers, /\/index\.php/);
+    await assertRejectedCommittedProjection(fixture, build, releaseVersion, {
+      label: "incomplete block theme index",
+      allowlist: ["README.md", "src/Runtime.php", "style.css", "theme.json"].join("\n") + "\n",
+      error: /theme requires/,
+    });
+    git(fixture, "reset", "--hard", changedCommit);
+    await assertRejectedCommittedProjection(fixture, build, releaseVersion, {
+      label: "missing theme index",
+      allowlist: ["README.md", "src/Runtime.php", "style.css"].join("\n") + "\n",
+      error: /theme requires/,
+    });
+  }
   await assertRejectedCommittedProjection(fixture, build, releaseVersion, {
     label: "missing allowlist entry",
     allowlist: "missing-file.php\n",
@@ -987,7 +389,15 @@ async function assertRenderedCommitArchive(renderedRoot, values) {
   });
   await assertRejectedCommittedProjection(fixture, build, releaseVersion, {
     label: "duplicate allowlist entry",
-    allowlist: "src/\nsrc\n",
+    allowlist: "README.md\nREADME.md\n",
+  });
+  await assertRejectedCommittedProjection(fixture, build, releaseVersion, {
+    label: "unsorted allowlist",
+    allowlist: "src/Runtime.php\nREADME.md\n",
+  });
+  await assertRejectedCommittedProjection(fixture, build, releaseVersion, {
+    label: "directory expansion",
+    allowlist: "src\n",
   });
   await assertRejectedCommittedProjection(fixture, build, releaseVersion, {
     label: "overlapping projection",
@@ -1033,7 +443,7 @@ async function assertRejectedCommittedProjection(
   fixture,
   build,
   releaseVersion,
-  { label, allowlist, add = [] },
+  { label, allowlist, add = [], error },
 ) {
   await writeFile(path.join(fixture, "release-contents.txt"), allowlist);
   git(fixture, "add", "release-contents.txt", ...add);
@@ -1045,43 +455,32 @@ async function assertRejectedCommittedProjection(
     { cwd: fixture, encoding: "utf8" },
   );
   assert.notEqual(result.status, 0, `Rendered builder accepted ${label}.`);
+  if (error) assert.match(result.stderr, error);
 }
 
 function fixtureName(logicalId) {
+  if (logicalId === "quality-workflow") return "quality.yml";
   if (logicalId === "release-workflow") return "release-please.yml";
   if (logicalId === "release-please-config")
     return "release-please-config.json";
   if (logicalId === "build-release-script") return "build-release.sh";
   if (logicalId === "verify-release-script") return "verify-release.sh";
-  if (logicalId === "upload-release-assets-script")
-    return "upload-release-assets.sh";
   throw new Error(`Unknown fixture logical ID: ${logicalId}`);
 }
 
 function validateManagedWorkflow(workflow) {
-  assert.match(workflow, /^on:\n  push:\n    branches:/m);
-  assert.match(workflow, /^  workflow_run:\n    workflows:\n      - Quality/m);
-  assert.match(workflow, /^permissions: \{\}$/m);
-  assert.match(workflow, /googleapis\/release-please-action@[0-9a-f]{40}/);
-  assert.match(workflow, /actions\/checkout@[0-9a-f]{40}/);
-  assert.match(workflow, /github\.event_name == 'workflow_run'/);
-  assert.match(workflow, /workflow_run\.conclusion == 'success'/);
-  assert.match(workflow, /workflow_run\.head_repository\.full_name/);
-  assert.match(
-    workflow,
-    /ref: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/,
-  );
-  assert.match(workflow, /\.merge_commit_sha == \$candidate/);
-  assert.match(workflow, /\.base\.sha == \$base/);
-  assert.match(workflow, /\.head\.sha == \$release_head/);
-  assert.match(workflow, /--target "\$RAN_RELEASE_COMMIT"/);
-  assert.match(workflow, /upload-release-assets\.sh verify/);
-  assert.match(workflow, /^            published$/m);
-  assert.match(workflow, /\.ran-booster-release-dist/);
-  assert.doesNotMatch(workflow, /^    needs: release-please$/m);
-  assert.doesNotMatch(workflow, /Consumer API 1/);
-  assert.doesNotMatch(workflow, /rm -rf build/);
-  assert.doesNotMatch(workflow, /uses: [^\n]+@(main|master|v\d+)\s*$/m);
+  for (const action of workflow.matchAll(/^\s+(?:- )?uses: (\S+)/gm))
+    assert.match(action[1], /^[^@]+@[0-9a-f]{40}$/);
+  assert.doesNotMatch(workflow, /secrets: inherit|pull_request_target|upload-release-assets|setup-node/);
+  if (workflow.startsWith("name: Quality")) {
+    assert.match(workflow, /workflow_dispatch:/);
+    assert.match(workflow, /contents: read/);
+    assert.match(workflow, /ran-profile-b-promotion/);
+    assert.match(workflow, /cmp /);
+  } else {
+    assert.match(workflow, /release-profile-b.yml@63c4a4b192bbb4cf203dab281b75a0907e85c3a9/);
+    assert.doesNotMatch(workflow, /\brun:|steps:|checkout|build-release/);
+  }
 }
 
 async function assertDeterministicPack() {
@@ -1111,7 +510,6 @@ async function assertDeterministicPack() {
   await mkdir(second);
   const arguments_ = [
     identity.repositoryId,
-    identity.releaseId,
     identity.tag,
     commit,
   ];
@@ -1121,6 +519,8 @@ async function assertDeterministicPack() {
     sourceFixture,
     "022",
   );
+  const commandOutput = path.join(temporary, "documented-pnpm-command");
+  execFileSync("pnpm", ["run", "build", "--", commandOutput, ...arguments_], { cwd: sourceFixture, stdio: "pipe" });
   await writeFile(
     path.join(sourceFixture, "package.json"),
     `${JSON.stringify({ name: "dirty", version: "9.9.9" })}\n`,
@@ -1134,7 +534,7 @@ async function assertDeterministicPack() {
     "{}\n",
   );
   await writeFile(
-    path.join(sourceFixture, "profiles/source-ready-wordpress-plugin-2.json"),
+    path.join(sourceFixture, "profiles/source-ready-wordpress-plugin-3.json"),
     "{}\n",
   );
   await writeFile(
@@ -1150,6 +550,7 @@ async function assertDeterministicPack() {
   const archiveName = "ran-booster-release-bootstrap-templates.zip";
   const one = await readFile(path.join(first, archiveName));
   const two = await readFile(path.join(second, archiveName));
+  assert.ok(one.equals(await readFile(path.join(commandOutput, archiveName))), "Documented pnpm build interface changed the bytes.");
   assert.ok(
     one.equals(two),
     "Pack builds are not byte-for-byte deterministic.",
@@ -1191,8 +592,7 @@ async function assertDeterministicPack() {
       path.join(sourceFixture, "scripts/build-pack.sh"),
       path.join(temporary, "missing-pack"),
       identity.repositoryId,
-      identity.releaseId,
-      identity.tag,
+        identity.tag,
       "f".repeat(40),
     ],
     { cwd: sourceFixture, encoding: "utf8" },
@@ -1216,6 +616,15 @@ async function assertDeterministicPack() {
     false,
   );
   assert.equal(members.includes("release-contents.txt"), false);
+  assert.equal(members.length, 6);
+  assert.equal(members.some(member => member.includes("advisories")), false);
+  const evidenceDir = path.join(temporary, "exchange");
+  execFileSync(process.execPath, [path.join(root, "scripts/pack-evidence.mjs"), path.join(first, archiveName), evidenceDir]);
+  const envelope = await loadJson(path.join(evidenceDir, "producer-exchange.json"));
+  assert.equal(envelope.producer_sha, commit);
+  assert.equal(envelope.zip_sha256, createHash("sha256").update(one).digest("hex"));
+  assert.equal(Object.keys(envelope.profiles).length, 2);
+  for (const profile of Object.values(envelope.profiles)) assert.equal(Object.keys(profile).length, 5);
 
   git(sourceFixture, "restore", ".");
   await rm(path.join(sourceFixture, "templates/shared/untracked-looking.tmpl"));
@@ -1231,7 +640,6 @@ async function assertDeterministicPack() {
   const changedCommit = git(sourceFixture, "rev-parse", "HEAD");
   const changedArguments = [
     identity.repositoryId,
-    identity.releaseId,
     identity.tag,
     changedCommit,
   ];
@@ -1280,8 +688,7 @@ async function assertDeterministicPack() {
         path.join(sourceFixture, "scripts/build-pack.sh"),
         path.join(temporary, "non-blob-pack"),
         identity.repositoryId,
-        identity.releaseId,
-        identity.tag,
+            identity.tag,
         nonBlobCommit,
       ],
       { cwd: sourceFixture, encoding: "utf8" },
@@ -1301,7 +708,7 @@ async function assertTamperFails() {
   execFileSync("unzip", ["-q", archive, "-d", extracted]);
   const target = path.join(
     extracted,
-    "templates/shared/upload-release-assets.sh.tmpl",
+    "templates/shared/build-release.sh.tmpl",
   );
   await writeFile(
     target,

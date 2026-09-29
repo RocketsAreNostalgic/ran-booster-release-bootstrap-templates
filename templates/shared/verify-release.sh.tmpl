@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export TZ=UTC LC_ALL=C
 
 fail() {
 	printf 'verify-release: %s\n' "$*" >&2
@@ -17,11 +18,15 @@ release_ref=${3:-}
 
 [[ -f "$archive" && ! -L "$archive" ]] || fail 'release ZIP is missing or symbolic.'
 [[ "$package_kind" == plugin || "$package_kind" == theme ]] || fail 'package kind is invalid.'
-[[ "$header_file" =~ ^[A-Za-z0-9._/-]+$ && "$header_file" != /* && "$header_file" != *'..'* ]] \
+[[ "$header_file" =~ ^[A-Za-z0-9._-]+$ && "$header_file" != /* && "$header_file" != *'..'* ]] \
 	|| fail 'header path is invalid.'
-[[ "$expected_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
+[[ "$expected_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
 	|| fail 'expected version is invalid.'
 [[ -n "$release_ref" ]] || fail 'expected an explicit release commit.'
+[[ "$slug" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ && "${#slug}" -le 100 ]] || fail 'package slug is invalid.'
+[[ "${#expected_version}" -le 63 && "${#slug}" -le 100 ]] || fail 'identity length exceeds the starter bounds.'
+[[ "$release_ref" =~ ^[0-9a-f]{40}$ ]] || fail 'expected an exact source commit.'
+
 commit=$(git -C "$project_root" rev-parse --verify "$release_ref^{commit}") \
 	|| fail 'release ref does not resolve to a commit.'
 [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || fail 'release commit is invalid.'
@@ -50,298 +55,115 @@ projection="$temporary/projection.tsv"
 trap 'rm -f "$actual" "$expected"; rm -rf "$temporary"' EXIT HUP INT TERM
 : > "$projection"
 
-node --input-type=module - "$archive" > "$actual" <<'RAN_ARCHIVE_INSPECTOR'
-import { readFileSync, statSync } from "node:fs";
-import { inflateRawSync } from "node:zlib";
-
-const limits = {
-  archiveBytes: 50 * 1024 * 1024,
-  members: 10000,
-  memberBytes: 127826407,
-  totalBytes: 127826407,
-  ratio: 200,
-};
-const crcTable = buildCrcTable();
-
-try {
-  const archive = process.argv[2];
-  const size = statSync(archive).size;
-  if (size === 0 || size > limits.archiveBytes) invalid("archive_size");
-  const bytes = readFileSync(archive);
-  const eocd = findEocd(bytes);
-  if (
-    eocd < 0 ||
-    bytes.readUInt16LE(eocd + 20) !== 0 ||
-    eocd + 22 !== bytes.length
-  )
-    invalid("directory_missing");
-  const disk = bytes.readUInt16LE(eocd + 4);
-  const centralDisk = bytes.readUInt16LE(eocd + 6);
-  const diskEntries = bytes.readUInt16LE(eocd + 8);
-  const entryCount = bytes.readUInt16LE(eocd + 10);
-  const centralSize = bytes.readUInt32LE(eocd + 12);
-  const centralOffset = bytes.readUInt32LE(eocd + 16);
-  if (
-    disk !== 0 ||
-    centralDisk !== 0 ||
-    diskEntries !== entryCount ||
-    entryCount === 0xffff ||
-    centralSize === 0xffffffff ||
-    centralOffset === 0xffffffff
-  )
-    invalid("multidisk_or_zip64");
-  if (
-    entryCount === 0 ||
-    entryCount > limits.members ||
-    centralOffset + centralSize !== eocd
-  )
-    invalid("directory_bounds");
-
-  const entries = [];
-  const rawNames = new Set();
-  const logicalNames = new Map();
-  let offset = centralOffset;
-  let totalBytes = 0;
-  for (let index = 0; index < entryCount; index += 1) {
-    if (offset + 46 > eocd || bytes.readUInt32LE(offset) !== 0x02014b50)
-      invalid("directory_record");
-    const madeBy = bytes.readUInt16LE(offset + 4);
-    const needed = bytes.readUInt16LE(offset + 6);
-    const flags = bytes.readUInt16LE(offset + 8);
-    const method = bytes.readUInt16LE(offset + 10);
-    const crc = bytes.readUInt32LE(offset + 16);
-    const compressedSize = bytes.readUInt32LE(offset + 20);
-    const uncompressedSize = bytes.readUInt32LE(offset + 24);
-    const nameLength = bytes.readUInt16LE(offset + 28);
-    const extraLength = bytes.readUInt16LE(offset + 30);
-    const commentLength = bytes.readUInt16LE(offset + 32);
-    const diskStart = bytes.readUInt16LE(offset + 34);
-    const attributes = bytes.readUInt32LE(offset + 38);
-    const localOffset = bytes.readUInt32LE(offset + 42);
-    const next = offset + 46 + nameLength + extraLength + commentLength;
-    if (
-      needed >= 45 ||
-      nameLength === 0 ||
-      extraLength !== 0 ||
-      commentLength !== 0 ||
-      diskStart !== 0 ||
-      compressedSize === 0xffffffff ||
-      uncompressedSize === 0xffffffff ||
-      localOffset === 0xffffffff ||
-      next > eocd
-    )
-      invalid("directory_record");
-    const name = decodeName(bytes.subarray(offset + 46, offset + 46 + nameLength));
-    const directory = name.endsWith("/");
-    validateName(name);
-    if (rawNames.has(name)) invalid("duplicate_member");
-    rawNames.add(name);
-    const logical = name.slice(0, directory ? -1 : undefined).toLowerCase();
-    if (logicalNames.has(logical)) invalid("normalized_collision");
-    logicalNames.set(logical, directory ? "directory" : "file");
-    validateType(madeBy, attributes, directory);
-    if ((flags & ~0x0800) !== 0 || ![0, 8].includes(method))
-      invalid("unsupported_member");
-    if (
-      uncompressedSize > limits.memberBytes ||
-      compressedSize > limits.archiveBytes ||
-      (compressedSize === 0
-        ? uncompressedSize > 0
-        : uncompressedSize / compressedSize > limits.ratio)
-    )
-      invalid("member_budget");
-    if (directory && (compressedSize !== 0 || uncompressedSize !== 0))
-      invalid("directory_payload");
-    totalBytes += uncompressedSize;
-    if (totalBytes > limits.totalBytes) invalid("total_budget");
-    entries.push({
-      name,
-      directory,
-      flags,
-      method,
-      crc,
-      compressedSize,
-      uncompressedSize,
-      localOffset,
-    });
-    offset = next;
-  }
-  if (offset !== eocd) invalid("directory_size");
-  validateHierarchy(logicalNames);
-  validateLocalRecords(bytes, entries, centralOffset);
-  for (const entry of entries)
-    process.stdout.write(`${entry.directory ? "D" : "F"}\t${entry.name}\n`);
-} catch (error) {
-  process.stderr.write(`verify-release archive: ${error?.code ?? "archive_invalid"}\n`);
-  process.exit(1);
+RAN_ARCHIVE_PATH="$archive" php -d memory_limit=512M > "$actual" <<'RAN_ARCHIVE_INSPECTOR'
+<?php
+// Same bounded central/local ZIP checks as the original inspector, using the
+// PHP runtime already selected by Quality. Never load or execute payload PHP.
+function invalid($code) { throw new RuntimeException($code); }
+function u16($b, $o) { if ($o + 2 > strlen($b)) invalid('directory_bounds'); return unpack('v', substr($b, $o, 2))[1]; }
+function u32($b, $o) { if ($o + 4 > strlen($b)) invalid('directory_bounds'); return unpack('V', substr($b, $o, 4))[1]; }
+function nameOf($name) {
+    if (!preg_match('//u', $name)) invalid('name_encoding');
+    return $name;
 }
-
-function validateLocalRecords(bytes, entries, centralOffset) {
-  const ordered = [...entries].sort((left, right) => left.localOffset - right.localOffset);
-  let expectedOffset = 0;
-  for (const entry of ordered) {
-    const offset = entry.localOffset;
-    if (offset !== expectedOffset || offset + 30 > centralOffset)
-      invalid("local_bounds");
-    if (bytes.readUInt32LE(offset) !== 0x04034b50) invalid("local_header");
-    const needed = bytes.readUInt16LE(offset + 4);
-    const flags = bytes.readUInt16LE(offset + 6);
-    const method = bytes.readUInt16LE(offset + 8);
-    const crc = bytes.readUInt32LE(offset + 14);
-    const compressedSize = bytes.readUInt32LE(offset + 18);
-    const uncompressedSize = bytes.readUInt32LE(offset + 22);
-    const nameLength = bytes.readUInt16LE(offset + 26);
-    const extraLength = bytes.readUInt16LE(offset + 28);
-    const nameStart = offset + 30;
-    const dataStart = nameStart + nameLength + extraLength;
-    const dataEnd = dataStart + compressedSize;
-    if (
-      needed >= 45 ||
-      extraLength !== 0 ||
-      flags !== entry.flags ||
-      method !== entry.method ||
-      crc !== entry.crc ||
-      compressedSize !== entry.compressedSize ||
-      uncompressedSize !== entry.uncompressedSize ||
-      dataEnd > centralOffset ||
-      decodeName(bytes.subarray(nameStart, nameStart + nameLength)) !== entry.name
-    )
-      invalid("local_mismatch");
-    const compressed = bytes.subarray(dataStart, dataEnd);
-    let output;
-    try {
-      output =
-        method === 0
-          ? Buffer.from(compressed)
-          : inflateRawSync(compressed, { maxOutputLength: limits.memberBytes });
-    } catch {
-      invalid("member_decompression");
+function validateName($name) {
+    if (strlen($name) > 4096 || !preg_match('~^[A-Za-z0-9._/-]+$~D', $name) || $name[0] === '/') invalid('member_path');
+    $path = substr($name, -1) === '/' ? substr($name, 0, -1) : $name;
+    foreach (explode('/', $path) as $part) {
+        if ($part === '' || $part === '.' || $part === '..' || strlen($part) > 255 || substr($part, -1) === '.' || preg_match('/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i', $part)) invalid('member_path');
     }
-    if (output.length !== uncompressedSize || crc32(output) !== crc)
-      invalid("member_integrity");
-    expectedOffset = dataEnd;
-  }
-  if (expectedOffset !== centralOffset) invalid("local_layout");
+}
+try {
+    $archive = getenv('RAN_ARCHIVE_PATH');
+    $size = filesize($archive);
+    if (!$size || $size > 50 * 1024 * 1024) invalid('archive_size');
+    $bytes = file_get_contents($archive);
+    $eocd = -1;
+    for ($i = strlen($bytes) - 22; $i >= max(0, strlen($bytes) - 65557); $i--) {
+        if (u32($bytes, $i) === 0x06054b50) { $eocd = $i; break; }
+    }
+    if ($eocd < 0 || u16($bytes, $eocd + 20) !== 0 || $eocd + 22 !== strlen($bytes)) invalid('directory_missing');
+    $count = u16($bytes, $eocd + 10);
+    $centralSize = u32($bytes, $eocd + 12);
+    $central = u32($bytes, $eocd + 16);
+    if (u16($bytes, $eocd + 4) !== 0 || u16($bytes, $eocd + 6) !== 0 || u16($bytes, $eocd + 8) !== $count || $count === 65535 || $centralSize === 0xffffffff || $central === 0xffffffff) invalid('multidisk_or_zip64');
+    if ($count === 0 || $count > 10000 || $central + $centralSize !== $eocd) invalid('directory_bounds');
+    $entries = []; $raw = []; $names = []; $offset = $central; $total = 0;
+    for ($i = 0; $i < $count; $i++) {
+        if ($offset + 46 > $eocd || u32($bytes, $offset) !== 0x02014b50) invalid('directory_record');
+        $madeBy = u16($bytes, $offset + 4); $needed = u16($bytes, $offset + 6);
+        $flags = u16($bytes, $offset + 8); $method = u16($bytes, $offset + 10);
+        $crc = u32($bytes, $offset + 16); $compressed = u32($bytes, $offset + 20); $expanded = u32($bytes, $offset + 24);
+        $nameLength = u16($bytes, $offset + 28); $extra = u16($bytes, $offset + 30); $comment = u16($bytes, $offset + 32);
+        $attributes = u32($bytes, $offset + 38); $local = u32($bytes, $offset + 42);
+        $next = $offset + 46 + $nameLength + $extra + $comment;
+        if ($needed >= 45 || !$nameLength || $extra || $comment || u16($bytes, $offset + 34) || $compressed === 0xffffffff || $expanded === 0xffffffff || $local === 0xffffffff || $next > $eocd) invalid('directory_record');
+        $name = nameOf(substr($bytes, $offset + 46, $nameLength));
+        validateName($name); $directory = substr($name, -1) === '/';
+        if (isset($raw[$name])) invalid('duplicate_member');
+        $raw[$name] = true;
+        $logical = strtolower($directory ? substr($name, 0, -1) : $name);
+        if (isset($names[$logical])) invalid('normalized_collision');
+        $names[$logical] = $directory ? 'directory' : 'file';
+        $mode = $attributes >> 16; $type = $mode & 0170000;
+        if (($madeBy >> 8) !== 3 || $directory !== (($attributes & 0x10) !== 0) || ($directory ? $type !== 0040000 : $type !== 0100000)) invalid('member_type');
+        if (!$directory && ($mode & 0111)) invalid('member_executable');
+        if (($flags & ~0x0800) || !in_array($method, [0, 8], true)) invalid('unsupported_member');
+        if ($expanded > 127826407 || $compressed > 50 * 1024 * 1024 || ($compressed === 0 ? $expanded > 0 : $expanded / $compressed > 200)) invalid('member_budget');
+        if ($directory && ($compressed || $expanded)) invalid('directory_payload');
+        $total += $expanded; if ($total > 127826407) invalid('total_budget');
+        $entries[] = compact('name', 'directory', 'flags', 'method', 'crc', 'compressed', 'expanded', 'local');
+        $offset = $next;
+    }
+    if ($offset !== $eocd) invalid('directory_size');
+    foreach ($names as $name => $type) {
+        $parts = explode('/', $name);
+        for ($i = 1; $i < count($parts); $i++) if (($names[implode('/', array_slice($parts, 0, $i))] ?? null) === 'file') invalid('member_hierarchy');
+    }
+    usort($entries, function ($a, $b) { return $a['local'] <=> $b['local']; });
+    $expected = 0;
+    foreach ($entries as $entry) {
+        $offset = $entry['local'];
+        if ($offset !== $expected || $offset + 30 > $central) invalid('local_bounds');
+        if (u32($bytes, $offset) !== 0x04034b50) invalid('local_header');
+        $nameLength = u16($bytes, $offset + 26); $extra = u16($bytes, $offset + 28);
+        $start = $offset + 30 + $nameLength + $extra; $end = $start + $entry['compressed'];
+        if (u16($bytes, $offset + 4) >= 45 || $extra || u16($bytes, $offset + 6) !== $entry['flags'] || u16($bytes, $offset + 8) !== $entry['method'] || u32($bytes, $offset + 14) !== $entry['crc'] || u32($bytes, $offset + 18) !== $entry['compressed'] || u32($bytes, $offset + 22) !== $entry['expanded'] || $end > $central || nameOf(substr($bytes, $offset + 30, $nameLength)) !== $entry['name']) invalid('local_mismatch');
+        $payload = substr($bytes, $start, $entry['compressed']);
+        $output = $entry['method'] === 0 ? $payload : @gzinflate($payload, max(1, $entry['expanded']));
+        if ($output === false) invalid('member_decompression');
+        if (strlen($output) !== $entry['expanded'] || crc32($output) !== $entry['crc']) invalid('member_integrity');
+        $expected = $end;
+    }
+    if ($expected !== $central) invalid('local_layout');
+    foreach ($entries as $entry) echo ($entry['directory'] ? 'D' : 'F') . "\t" . $entry['name'] . "\n";
+} catch (Throwable $error) {
+    fwrite(STDERR, 'verify-release archive: ' . $error->getMessage() . "\n"); exit(1);
 }
 
-function validateName(name) {
-  if (
-    name !== name.normalize("NFC") ||
-    name.length > 4096 ||
-    !/^[A-Za-z0-9._/-]+$/.test(name) ||
-    name.startsWith("/") ||
-    /^[A-Za-z]:/.test(name) ||
-    name.includes("\\") ||
-    name.includes("\0")
-  )
-    invalid("member_path");
-  const path = name.endsWith("/") ? name.slice(0, -1) : name;
-  const parts = path.split("/");
-  if (
-    path === "" ||
-    parts.some(
-      (part) =>
-        part === "" ||
-        part === "." ||
-        part === ".." ||
-        part.length > 255 ||
-        part.endsWith(".") ||
-        /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part),
-    )
-  )
-    invalid("member_path");
-}
-
-function validateHierarchy(names) {
-  for (const [name] of names) {
-    const parts = name.split("/");
-    for (let index = 1; index < parts.length; index += 1)
-      if (names.get(parts.slice(0, index).join("/")) === "file")
-        invalid("member_hierarchy");
-  }
-}
-
-function validateType(madeBy, attributes, directory) {
-  const host = madeBy >>> 8;
-  const mode = attributes >>> 16;
-  const type = mode & 0o170000;
-  const dosDirectory = (attributes & 0x10) !== 0;
-  if (host !== 3 || directory !== dosDirectory) invalid("member_type");
-  if (directory ? type !== 0o040000 : type !== 0o100000)
-    invalid("member_type");
-  if (!directory && (mode & 0o111) !== 0) invalid("member_executable");
-}
-
-function decodeName(bytes) {
-  const name = bytes.toString("utf8");
-  if (!Buffer.from(name, "utf8").equals(bytes)) invalid("name_encoding");
-  return name;
-}
-
-function findEocd(bytes) {
-  const minimum = Math.max(0, bytes.length - 65_557);
-  for (let offset = bytes.length - 22; offset >= minimum; offset -= 1)
-    if (bytes.readUInt32LE(offset) === 0x06054b50) return offset;
-  return -1;
-}
-
-function buildCrcTable() {
-  return Array.from({ length: 256 }, (_, value) => {
-    let crc = value;
-    for (let bit = 0; bit < 8; bit += 1)
-      crc = (crc & 1) !== 0 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
-    return crc >>> 0;
-  });
-}
-
-function crc32(bytes) {
-  let crc = 0xffffffff;
-  for (const byte of bytes) crc = crcTable[(crc ^ byte) & 0xff] ^ (crc >>> 8);
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-function invalid(code) {
-  throw Object.assign(new Error(code), { code });
-}
 RAN_ARCHIVE_INSPECTOR
 
 allowlist_oid=$(regular_blob_oid release-contents.txt)
 git -C "$project_root" cat-file blob "$allowlist_oid" > "$allowlist"
 [[ -s "$allowlist" ]] || fail 'release allowlist is empty.'
 
-declare -A declared=()
 declare -A projected=()
+previous=''
 while IFS= read -r entry || [[ -n "$entry" ]]; do
-	[[ -z "$entry" || "$entry" == \#* ]] && continue
-	[[ "$entry" =~ ^[A-Za-z0-9._/-]+$ && "$entry" != /* && "$entry" != *'..'* ]] \
+	[[ "$entry" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ && "$entry" != *'..'* ]] \
 		|| fail "release allowlist entry is unsafe: $entry"
-	entry=${entry%/}
-	[[ -n "$entry" && -z "${declared[$entry]+x}" ]] \
-		|| fail "duplicate release allowlist entry: $entry"
-	declared[$entry]=1
-
-	found=0
-	while IFS= read -r -d '' record; do
-		metadata=${record%%$'\t'*}
-		path=${record#*$'\t'}
-		read -r mode type object extra <<< "$metadata"
-		[[ "$path" == "$entry" || "$path" == "$entry/"* ]] \
-			|| fail "committed source escaped its allowlist entry: $path"
-		[[ "$path" =~ ^[A-Za-z0-9._/-]+$ && "$path" != /* && "$path" != *'..'* ]] \
-			|| fail "committed source path is unsafe: $path"
-		[[ -z "${extra:-}" && "$type" == blob \
-			&& ( "$mode" == 100644 || "$mode" == 100755 ) \
-			&& "$object" =~ ^[0-9a-f]{40,64}$ ]] \
-			|| fail "committed source is not a regular blob: $path"
-		[[ -z "${projected[$path]+x}" ]] \
-			|| fail "release allowlist projects a duplicate path: $path"
-		projected[$path]=1
-		printf '%s\t%s\n' "$path" "$object" >> "$projection"
-		found=$((found + 1))
-	done < <(git -C "$project_root" ls-tree -r -z --full-tree "$commit" -- "$entry")
-	[[ "$found" -gt 0 ]] || fail "release allowlist entry is missing or empty: $entry"
+	[[ -z "$previous" || "$previous" < "$entry" ]] || fail 'allowlist must contain sorted unique explicit files.'
+	previous=$entry
+	object=$(regular_blob_oid "$entry")
+	projected[$entry]=1
+	printf '%s\t%s\n' "$entry" "$object" >> "$projection"
 done < "$allowlist"
-[[ ${#declared[@]} -gt 0 && ${#projected[@]} -gt 0 ]] || fail 'release allowlist is empty.'
+[[ ${#projected[@]} -gt 0 ]] || fail 'release allowlist is empty.'
+
+if [[ "$package_kind" == theme ]]; then
+	[[ -n "${projected[index.php]+x}" || -n "${projected[templates/index.html]+x}" ]] \
+		|| fail 'theme requires an allowlisted index.php or templates/index.html.'
+fi
 
 printf 'D\t%s/\n' "$slug" > "$expected"
 while IFS=$'\t' read -r file object; do
@@ -360,6 +182,9 @@ diff -u "$expected" "$actual" || fail 'release ZIP differs from the committed ru
 unzip -tqq "$archive" >/dev/null || fail 'release ZIP is corrupt.'
 unzip -q "$archive" -d "$temporary/extracted"
 while IFS=$'\t' read -r file object; do
+	if head -n 1 "$temporary/extracted/$slug/$file" | grep -Fxq 'version https://git-lfs.github.com/spec/v1'; then
+		fail "unresolved LFS pointer: $file"
+	fi
 	git -C "$project_root" cat-file blob "$object" \
 		| cmp -s - "$temporary/extracted/$slug/$file" \
 		|| fail "release file differs from the release commit: $file"
@@ -367,7 +192,14 @@ done < <(LC_ALL=C sort -t $'\t' -k1,1 "$projection")
 
 header="$temporary/extracted/$slug/$header_file"
 [[ -f "$header" ]] || fail 'WordPress header file is absent from the release.'
-header_version=$(sed -nE 's/^[[:space:]]*(\*)?[[:space:]]*Version:[[:space:]]*([^[:space:]]+).*/\2/p' "$header")
+php_version=$(sed -nE 's/^[[:space:]]*(\*)?[[:space:]]*Requires PHP:[[:space:]]*([^[:space:]]+)[[:blank:]]*$/\2/p' "$header")
+[[ "$php_version" =~ ^(7\.4|8\.[0-5])$ ]] || fail 'Requires PHP is outside the reviewed starter set.'
+if [[ -n "${RAN_EXPECTED_PHP_VERSION:-}" && "$php_version" != "$RAN_EXPECTED_PHP_VERSION" ]]; then
+	fail 'Requires PHP does not match the PHP version selected for Quality syntax checks.'
+fi
+wp_version=$(sed -nE 's/^[[:space:]]*(\*)?[[:space:]]*Requires at least:[[:space:]]*([^[:space:]]+)[[:blank:]]*$/\2/p' "$header")
+[[ "$wp_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || fail 'Requires at least header is missing or invalid.'
+header_version=$(sed -nE 's/^[[:space:]]*(\*)?[[:space:]]*Version:[[:space:]]*([^[:space:]]+)[[:blank:]]*$/\2/p' "$header")
 [[ "$header_version" == "$expected_version" ]] \
 	|| fail 'archived WordPress header version is incorrect.'
 if [[ "$package_kind" == plugin ]]; then
@@ -377,16 +209,17 @@ else
 	grep -Eq '^[[:space:]]*Theme Name:[[:space:]]*[^[:space:]]' "$header" \
 		|| fail 'theme name header is missing.'
 fi
-grep -Fq "Update URI: $update_uri" "$header" \
-	|| fail 'canonical Update URI is missing.'
+actual_uri=$(sed -nE 's/^[[:space:]]*(\*)?[[:space:]]*Update URI:[[:space:]]*([^[:space:]]+)[[:space:]]*$/\2/p' "$header")
+[[ "$actual_uri" == "$update_uri" ]] || fail 'canonical Update URI is missing or differs.'
 
 version_oid=$(regular_blob_oid version.txt)
 manifest_oid=$(regular_blob_oid .release-please-manifest.json)
-version_source=$(git -C "$project_root" cat-file blob "$version_oid" | tr -d '[:space:]')
 manifest_version=$(git -C "$project_root" cat-file blob "$manifest_oid" \
-	| node -e 'let input=""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => process.stdout.write(JSON.parse(input)["."] || ""));')
-[[ "$version_source" == "$expected_version" && "$manifest_version" == "$expected_version" ]] \
+	| jq -er 'select(type == "object" and keys == ["."]) | .["."] | select(type == "string")' )
+[[ "$manifest_version" == "$expected_version" ]] \
 	|| fail 'release commit version sources do not agree.'
+git -C "$project_root" cat-file blob "$version_oid" | cmp -s - <(printf '%s\n' "$expected_version") \
+	|| fail 'version.txt does not contain the exact expected version and one LF.'
 
 archive_size=$(wc -c < "$archive" | tr -d '[:space:]')
 archive_sha256=$(shasum -a 256 "$archive" | awk '{ print $1 }')

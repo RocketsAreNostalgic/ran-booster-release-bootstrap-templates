@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export TZ=UTC LC_ALL=C
 
 fail() {
 	printf 'build-release: %s\n' "$*" >&2
@@ -14,13 +15,16 @@ release_ref=${1:-}
 expected_version=${2:-}
 output_dir=${3:-"$project_root/.ran-booster-release-dist"}
 
-[[ "$slug" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || fail 'package slug is invalid.'
 [[ "$package_type" == plugin || "$package_type" == theme ]] || fail 'package type is invalid.'
-[[ "$header_file" =~ ^[A-Za-z0-9._/-]+$ && "$header_file" != /* && "$header_file" != *'..'* ]] \
+[[ "$header_file" =~ ^[A-Za-z0-9._-]+$ && "$header_file" != /* && "$header_file" != *'..'* ]] \
 	|| fail 'header path is invalid.'
 [[ -n "$release_ref" ]] || fail 'expected an explicit release commit.'
-[[ "$expected_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
+[[ "$expected_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
 	|| fail 'expected version must be an exact release version.'
+
+[[ "$slug" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ && "${#slug}" -le 100 ]] || fail 'package slug is invalid.'
+[[ "${#expected_version}" -le 63 && "${#slug}" -le 100 ]] || fail 'identity length exceeds the starter bounds.'
+[[ "$release_ref" =~ ^[0-9a-f]{40}$ ]] || fail 'expected an exact source commit.'
 
 commit=$(git -C "$project_root" rev-parse --verify "$release_ref^{commit}") \
 	|| fail 'release ref does not resolve to a commit.'
@@ -47,6 +51,10 @@ trap 'rm -rf "$temporary"' EXIT HUP INT TERM
 stage_root="$temporary/stage/$slug"
 allowlist="$temporary/release-contents.txt"
 projection="$temporary/projection.tsv"
+[[ ! -L "$output_dir" ]] || fail 'output directory is symbolic.'
+if [[ -e "$output_dir" ]]; then
+	[[ -d "$output_dir" && -z "$(find "$output_dir" -mindepth 1 -print -quit)" ]] || fail 'output directory must be empty.'
+fi
 mkdir -p "$stage_root" "$output_dir"
 : > "$projection"
 
@@ -54,39 +62,18 @@ allowlist_oid=$(regular_blob_oid release-contents.txt)
 git -C "$project_root" cat-file blob "$allowlist_oid" > "$allowlist"
 [[ -s "$allowlist" ]] || fail 'release allowlist is empty.'
 
-declare -A declared=()
 declare -A projected=()
+previous=''
 while IFS= read -r entry || [[ -n "$entry" ]]; do
-	[[ -z "$entry" || "$entry" == \#* ]] && continue
-	[[ "$entry" =~ ^[A-Za-z0-9._/-]+$ && "$entry" != /* && "$entry" != *'..'* ]] \
+	[[ "$entry" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ && "$entry" != *'..'* ]] \
 		|| fail "release allowlist entry is unsafe: $entry"
-	entry=${entry%/}
-	[[ -n "$entry" && -z "${declared[$entry]+x}" ]] \
-		|| fail "duplicate release allowlist entry: $entry"
-	declared[$entry]=1
-
-	found=0
-	while IFS= read -r -d '' record; do
-		metadata=${record%%$'\t'*}
-		path=${record#*$'\t'}
-		read -r mode type object extra <<< "$metadata"
-		[[ "$path" == "$entry" || "$path" == "$entry/"* ]] \
-			|| fail "committed source escaped its allowlist entry: $path"
-		[[ "$path" =~ ^[A-Za-z0-9._/-]+$ && "$path" != /* && "$path" != *'..'* ]] \
-			|| fail "committed source path is unsafe: $path"
-		[[ -z "${extra:-}" && "$type" == blob \
-			&& ( "$mode" == 100644 || "$mode" == 100755 ) \
-			&& "$object" =~ ^[0-9a-f]{40,64}$ ]] \
-			|| fail "committed source is not a regular blob: $path"
-		[[ -z "${projected[$path]+x}" ]] \
-			|| fail "release allowlist projects a duplicate path: $path"
-		projected[$path]=1
-		printf '%s\t%s\n' "$path" "$object" >> "$projection"
-		found=$((found + 1))
-	done < <(git -C "$project_root" ls-tree -r -z --full-tree "$commit" -- "$entry")
-	[[ "$found" -gt 0 ]] || fail "release allowlist entry is missing or empty: $entry"
+	[[ -z "$previous" || "$previous" < "$entry" ]] || fail 'allowlist must contain sorted unique explicit files.'
+	previous=$entry
+	object=$(regular_blob_oid "$entry")
+	projected[$entry]=1
+	printf '%s\t%s\n' "$entry" "$object" >> "$projection"
 done < "$allowlist"
-[[ ${#declared[@]} -gt 0 && ${#projected[@]} -gt 0 ]] || fail 'release allowlist is empty.'
+[[ ${#projected[@]} -gt 0 ]] || fail 'release allowlist is empty.'
 
 header_oid=$(regular_blob_oid "$header_file")
 version_oid=$(regular_blob_oid version.txt)
@@ -94,19 +81,23 @@ manifest_oid=$(regular_blob_oid .release-please-manifest.json)
 [[ -n "${projected[$header_file]+x}" ]] \
 	|| fail 'WordPress header is absent from the committed allowlist.'
 header_version=$(git -C "$project_root" cat-file blob "$header_oid" \
-	| sed -nE 's/^[[:space:]]*(\*)?[[:space:]]*Version:[[:space:]]*([^[:space:]]+).*/\2/p')
-version_source=$(git -C "$project_root" cat-file blob "$version_oid" | tr -d '[:space:]')
+	| sed -nE 's/^[[:space:]]*(\*)?[[:space:]]*Version:[[:space:]]*([^[:space:]]+)[[:blank:]]*$/\2/p')
 manifest_version=$(git -C "$project_root" cat-file blob "$manifest_oid" \
-	| node -e 'let input=""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => process.stdout.write(JSON.parse(input)["."] || ""));')
+	| jq -er 'select(type == "object" and keys == ["."]) | .["."] | select(type == "string")' )
 [[ "$header_version" == "$expected_version" ]] \
 	|| fail 'WordPress header version does not match the expected version.'
-[[ "$version_source" == "$expected_version" && "$manifest_version" == "$expected_version" ]] \
+[[ "$manifest_version" == "$expected_version" ]] \
 	|| fail 'Release Please version sources do not agree.'
+git -C "$project_root" cat-file blob "$version_oid" | cmp -s - <(printf '%s\n' "$expected_version") \
+	|| fail 'version.txt does not contain the exact expected version and one LF.'
 
 while IFS=$'\t' read -r file object; do
 	destination="$stage_root/$file"
 	mkdir -p "$(dirname -- "$destination")"
 	git -C "$project_root" cat-file blob "$object" > "$destination"
+	if head -n 1 "$destination" | grep -Fxq 'version https://git-lfs.github.com/spec/v1'; then
+		fail "unresolved LFS pointer: $file"
+	fi
 done < <(LC_ALL=C sort -t $'\t' -k1,1 "$projection")
 
 find "$temporary/stage" -type d -exec chmod 0755 {} +
@@ -117,7 +108,7 @@ archive="$output_dir/$slug-$expected_version.zip"
 rm -f "$archive"
 (
 	cd "$temporary/stage"
-	find "$slug" -print | LC_ALL=C sort | zip -Xq "$archive" -@
+	find "$slug" -print | LC_ALL=C sort | zip -0 -Xq "$archive" -@
 )
 
 bash "$project_root/scripts/verify-release.sh" "$archive" "$expected_version" "$commit"

@@ -18,20 +18,15 @@ assert(manifestBytes.length <= 65536, "Manifest is oversized.");
 const manifest = await loadJson(path.join(packRoot, "template-pack.json"));
 validatePublished(manifest);
 
-const [repositoryId, releaseId, releaseTag, releaseCommit] =
-  process.argv.slice(3);
+const [repositoryId, releaseTag, releaseCommit] = process.argv.slice(3);
 if (
-  [repositoryId, releaseId, releaseTag, releaseCommit].some(
+  [repositoryId, releaseTag, releaseCommit].some(
     (value) => value !== undefined && value !== "",
   )
 ) {
   assert(
     manifest.repository.id === repositoryId,
     "Expected repository ID does not match.",
-  );
-  assert(
-    manifest.release.id === Number(releaseId),
-    "Expected release ID does not match.",
   );
   assert(
     manifest.release.tag === releaseTag,
@@ -58,7 +53,7 @@ for (const profile of Object.values(manifest.profiles)) {
     );
     const text = bytes.toString("utf8");
     assert(
-      Buffer.from(text, "utf8").equals(bytes),
+      Buffer.from(text, "utf8").equals(bytes) && !text.includes("\0"),
       `Entry is not valid UTF-8: ${logicalId}`,
     );
     const actualTokens = [...new Set(templateTokens(text))].sort();

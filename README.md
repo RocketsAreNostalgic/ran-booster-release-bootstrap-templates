@@ -1,95 +1,80 @@
 # RAN Booster release bootstrap templates
 
-This public repository publishes immutable, independently reviewable template
-packs for the source-ready release bootstrap in RAN Booster Release
-Deployments. It contains no WordPress runtime code and cannot change a target
-repository by itself.
+This repository produces reviewed **Consumer API 3** initial release starters for
+one source-ready WordPress plugin or theme at a GitHub repository root. The target
+must use `main`, stable SemVer, committed installable files and a reviewed explicit
+runtime allowlist. Complex builds, existing automation and ambiguous package
+metadata require manual integration. This is not a build-framework detector.
 
-The existing immutable `v0.2.0` release is historical Consumer API 1 evidence.
-Release Deployments does not yet consume a supported published pack. A future,
-separately authorised Release Deployments integration will select one exact
-stable Consumer API 2 release, verify its repository and release identity,
-archive digest, manifest, and every member digest, then render a draft pull
-request for the repository owner to review. It will not execute pack code inside
-WordPress or read templates from a branch or raw URL.
+The controlling contract is [G0](https://github.com/RocketsAreNostalgic/.github/blob/7bb26782f53ae0ba9fab066f249576faa63a7d4a/BOOTSTRAP_STARTER_CONTRACT.md),
+with [examples](https://github.com/RocketsAreNostalgic/.github/blob/7bb26782f53ae0ba9fab066f249576faa63a7d4a/BOOTSTRAP_STARTER_EXAMPLES.md).
+The frozen technical contract came from #84; #86 clarified execution prerequisites
+and deferred UI/manual acceptance without changing the format. Current work is
+tracked in [#22](https://github.com/RocketsAreNostalgic/ran-booster-release-bootstrap-templates/issues/22)
+and [programme #81](https://github.com/RocketsAreNostalgic/.github/issues/81).
+This source does not establish consumer convergence, publication or installed
+feature acceptance. Historical immutable API-1/API-2 assets remain untouched.
 
-## Consumer API 2
+## Pack boundary
 
-Consumer API 2 is the sole forward source generation and declares two
-stable-release profiles:
+One `ran-booster-release-bootstrap-templates.zip` contains exactly six inert
+regular files: `template-pack.json` and five shared templates. Both
+`source-ready-wordpress-plugin/3` and `source-ready-wordpress-theme/3` map the same
+five logical entries; header/package placeholders supply necessary differences.
 
-- `source-ready-wordpress-plugin/2`
-- `source-ready-wordpress-theme/2`
+| Logical entry | Consumer-owned destination |
+| --- | --- |
+| quality-workflow | `.github/workflows/quality.yml` |
+| release-workflow | `.github/workflows/release-please.yml` |
+| release-please-config | `release-please-config.json` |
+| build-release-script | `scripts/build-release.sh` |
+| verify-release-script | `scripts/verify-release.sh` |
 
-Prerelease configuration requires a future consumer API because inert literal
-substitution must not conditionally add Release Please behavior.
+The manifest binds canonical repository name/numeric repository ID, stable pack
+version, tag and exact source commit. It declares member paths, sizes, digests and
+literal placeholder types only. Numeric release/asset IDs are separately verified
+transport facts and are never build inputs. Metadata grants no destinations,
+writes, permissions, triggers or executable capabilities. The consumer owns the
+closed output map, validated literal replacement and confirmation-time re-fetch.
+Nothing in a downloaded pack executes on WordPress.
 
-The manifest contains only logical entry IDs and pack-internal metadata. The
-consumer maps those IDs to target paths and owns every operation, permission,
-trigger, bounded edit, and placeholder validation rule. A pack cannot grant
-itself a new capability.
+The consumer additionally creates version/manifest/allowlist inputs, passive
+`.ran-booster-release-starter.json` and `RELEASE-STARTER.md`. These are not extra pack
+members. [Operator guidance](docs/RELEASE-STARTER.md) is B's reference handoff for A;
+A must render its verified origin values and actual target details. After the
+initial draft setup PR, maintainers own the files. There is no update engine,
+automatic repair, fallback format or bridge release.
 
-The generated target bundle includes a managed two-event Release Please
-workflow, a Release Please configuration, deterministic build and verification
-scripts, an exact release upload/readback script, and a runtime allowlist. A
-push prepares version and notes only. Publication requires the successful
-same-repository main-push SHA from the named Quality workflow and an exact
-merged Release Please pull request for that SHA. Release Please uses the
-`simple` strategy and a root `CHANGELOG.md`; the consumer also creates or safely
-extends root `.prettierignore` with `/CHANGELOG.md`.
+## Build and checks
 
-Both the pack and the generated plugin/theme builders require an explicit Git
-commit. Version sources, allowlists, headers, manifest inputs, and every
-archived payload byte are projected from that commit; dirty tracked or
-untracked checkout files are not artifact authority. Their verifiers
-independently compare the archive with the same committed projection.
-
-A locally supplied release ID produces a deterministic contract fixture only.
-It is not candidate or publication evidence: Consumer API 2 embeds the real
-GitHub release ID, which does not exist until the separately authorised release
-workflow creates or recovers its exact draft. That workflow then builds the
-final ZIP from the successful Quality commit and actual release tuple before
-upload and immutable readback. In particular, current source version `0.2.0`
-must never be confused with or substituted for the historical immutable API 1
-release at `v0.2.0`.
-
-After draft creation, both the repository publisher and every generated
-publisher use a bounded exact-draft discovery readback. They tolerate only the
-brief absent-to-draft propagation window; contradictory identities, API errors,
-or a draft that remains unavailable fail closed before any asset upload.
-
-Before extraction, both verifiers parse the ZIP central directory and local
-records, reject unsafe or ambiguous paths and member types, enforce fixed
-archive, member, expanded-size, and compression-ratio limits, and validate each
-stored or deflated member's actual length and CRC. They then prove the exact
-expected member set before allowing `unzip` to inspect or extract the archive.
-The template pack is limited to 2 MiB, 32 members, 256 KiB per member, 1 MiB
-expanded, and a 200:1 ratio. Generated WordPress release ZIPs use the updater's
-50 MiB archive, 10,000-member, and 127,826,407-byte expanded envelope with the
-same fixed ratio.
-
-The `main` branch is protected by the active `Protect default branch` ruleset:
-pull requests may use squash or merge commits, both `Pack inputs` and `Quality`
-must pass from GitHub Actions against current `main`, stale approvals are
-dismissed after new pushes, no broad organisation-admin pull-request bypass is
-configured, and force pushes and deletion are blocked. Immutable releases are
-enabled and `RAN_IMMUTABLE_RELEASES_ENABLED=true`; these settings are necessary
-preconditions and do not themselves authorize a release.
-
-## Development
-
-Repository verification uses Node.js 24.11.0 and pnpm 11.13.1. Bash, `zip`,
-`unzip`, and `shasum` are also required.
+Use Node **24.11.0** and pnpm **11.13.1**. No executable npm dependencies are needed.
+The checks also require Git, Bash, jq, zip/unzip, SHA-256 utilities and PHP with zlib
+for rendered adapter verification. Generated repositories use their reviewed PHP
+runtime on `ubuntu-24.04`; they do not install Node or a package manager. The
+retained ZIP inspector's central/local/header/CRC checks use that existing PHP
+runtime, never target PHP code.
 
 ```sh
+pnpm install --frozen-lockfile
 pnpm check
-pnpm run build -- dist <repository-id> <release-id> v0.2.0 <release-commit>
-bash scripts/verify-pack.sh dist/ran-booster-release-bootstrap-templates.zip \
-  <repository-id> <release-id> v0.2.0 <release-commit>
+pnpm run build -- dist 1322743261 v0.2.1 <exact-source-commit>
+bash scripts/verify-pack.sh dist/ran-booster-release-bootstrap-templates.zip 1322743261 v0.2.1 <exact-source-commit>
+node scripts/pack-evidence.mjs dist/ran-booster-release-bootstrap-templates.zip dist
 ```
 
-Every release contains one fixed-name asset,
-`ran-booster-release-bootstrap-templates.zip`; its manifest and immutable
-release identity carry the pack version.
-See [RELEASE.md](RELEASE.md) before publishing and [SECURITY.md](SECURITY.md)
-for the trust model and vulnerability reporting policy.
+Use the version from the selected commit, not the illustrative version above.
+The full suite renders both profiles, builds real Git fixtures, compares dirty
+versus clean inputs and different umasks, tests committed projection and metadata
+failures, and rejects hostile archives before extraction. It independently builds
+and verifies the pack twice. ZIP/path/member/resource/encoding/digest controls and
+ambiguous JSON-key rejection remain mandatory. [Gate migration](docs/QUALIFICATION.md)
+records retained, delegated and removed responsibilities.
+
+Read-only Quality uploads exact tested bytes, the Profile B promotion manifest,
+producer exchange metadata and actual plugin/theme rendered fixtures. The envelope
+records the source/digests/run/attempt; obtain the artifact ID from the upload's
+actual run. A must test these actual bytes through the candidate PHP consumer.
+Synthetic transport facts for this unpublished candidate are fixtures only.
+
+The bounded `security/release-starter-advisories.json` is current repository
+maintenance metadata, never a pack member or a target payload. See [SECURITY.md](SECURITY.md).

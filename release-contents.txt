@@ -1,3 +1,7 @@
-# The deterministic release asset contains exactly these pack-relative paths.
+# Six inert regular members: manifest plus five shared templates.
 template-pack.json
-templates
+templates/shared/build-release.sh.tmpl
+templates/shared/quality.yml.tmpl
+templates/shared/release-please-config.json.tmpl
+templates/shared/release-please.yml.tmpl
+templates/shared/verify-release.sh.tmpl

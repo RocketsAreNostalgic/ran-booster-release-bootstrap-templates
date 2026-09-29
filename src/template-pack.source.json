@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "consumer_api": 2,
+  "consumer_api": 3,
   "profiles": [
-    "profiles/source-ready-wordpress-plugin-2.json",
-    "profiles/source-ready-wordpress-theme-2.json"
+    "profiles/source-ready-wordpress-plugin-3.json",
+    "profiles/source-ready-wordpress-theme-3.json"
   ]
 }
