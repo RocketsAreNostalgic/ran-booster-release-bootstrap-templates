@@ -194,6 +194,9 @@ header="$temporary/extracted/$slug/$header_file"
 [[ -f "$header" ]] || fail 'WordPress header file is absent from the release.'
 php_version=$(sed -nE 's/^[[:space:]]*(\*)?[[:space:]]*Requires PHP:[[:space:]]*([^[:space:]]+)[[:blank:]]*$/\2/p' "$header")
 [[ "$php_version" =~ ^(7\.4|8\.[0-5])$ ]] || fail 'Requires PHP is outside the reviewed starter set.'
+if [[ -n "${RAN_EXPECTED_PHP_VERSION:-}" && "$php_version" != "$RAN_EXPECTED_PHP_VERSION" ]]; then
+	fail 'Requires PHP does not match the PHP version selected for Quality syntax checks.'
+fi
 wp_version=$(sed -nE 's/^[[:space:]]*(\*)?[[:space:]]*Requires at least:[[:space:]]*([^[:space:]]+)[[:blank:]]*$/\2/p' "$header")
 [[ "$wp_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || fail 'Requires at least header is missing or invalid.'
 header_version=$(sed -nE 's/^[[:space:]]*(\*)?[[:space:]]*Version:[[:space:]]*([^[:space:]]+)[[:blank:]]*$/\2/p' "$header")

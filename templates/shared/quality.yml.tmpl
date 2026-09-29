@@ -60,7 +60,7 @@ jobs:
           bash scripts/build-release.sh "$SOURCE_SHA" "$version" "$work/one"
           bash scripts/build-release.sh "$SOURCE_SHA" "$version" "$work/two"
           cmp "$work/one/$archive" "$work/two/$archive"
-          bash scripts/verify-release.sh "$work/one/$archive" "$version" "$SOURCE_SHA"
+          RAN_EXPECTED_PHP_VERSION='{{RAN_PHP_VERSION}}' bash scripts/verify-release.sh "$work/one/$archive" "$version" "$SOURCE_SHA"
           unzip -q "$work/one/$archive" -d "$work/payload"
           find "$work/payload" -type f -name '*.php' -print0 | xargs -0 -r -n1 php -l
           test ! -e .ran-booster-release-dist

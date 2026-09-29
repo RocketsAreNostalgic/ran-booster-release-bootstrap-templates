@@ -216,6 +216,14 @@ async function assertRenderedCommitArchive(renderedRoot, values) {
   });
   const qualityResult = runQuality(commit);
   assert.equal(qualityResult.status, 0, qualityResult.stderr);
+  git(fixture, "restore", ".");
+  await writeFile(path.join(fixture, values.HEADER_PATH), header.replace("Requires PHP: 8.0", "Requires PHP: 8.1"));
+  git(fixture, "add", values.HEADER_PATH);
+  git(fixture, "commit", "-m", "test: advertised minimum PHP differs from Quality");
+  const mismatchedQuality = runQuality(git(fixture, "rev-parse", "HEAD"));
+  assert.notEqual(mismatchedQuality.status, 0);
+  assert.match(mismatchedQuality.stdout + mismatchedQuality.stderr, /Requires PHP does not match/);
+  git(fixture, "reset", "--hard", commit);
   const promotion = await loadJson(path.join(fixture, ".ran-booster-release-dist/ran-profile-b-promotion.json"));
   assert.equal(promotion.source_commit, commit);
   assert.equal(promotion.quality_commit, commit);
