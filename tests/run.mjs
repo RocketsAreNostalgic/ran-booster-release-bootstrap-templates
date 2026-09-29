@@ -131,12 +131,14 @@ async function assertRenderedCommitArchive(renderedRoot, values) {
   );
   const scripts = path.join(fixture, "scripts");
   const source = path.join(fixture, "src");
+  const assets = path.join(fixture, "assets");
   const cleanOutput = path.join(fixture, "clean-output");
   const dirtyOutput = path.join(fixture, "dirty-output");
   const changedOutput = path.join(fixture, "changed-output");
   const releaseVersion = "1.2.3";
   await mkdir(scripts, { recursive: true });
   await mkdir(source, { recursive: true });
+  await mkdir(assets, { recursive: true });
   await cp(
     path.join(renderedRoot, "build-release.sh"),
     path.join(scripts, "build-release.sh"),
@@ -154,9 +156,10 @@ async function assertRenderedCommitArchive(renderedRoot, values) {
   await writeFile(path.join(fixture, "version.txt"), `${releaseVersion}\n`);
   await writeFile(
     path.join(fixture, "release-contents.txt"),
-    ["src/Runtime.php", values.HEADER_PATH, "README.md", ...(values.PACKAGE_TYPE === "theme" ? ["index.php"] : [])].sort().join("\n") + "\n",
+    ["src/Runtime.php", "assets/repeated.txt", values.HEADER_PATH, "README.md", ...(values.PACKAGE_TYPE === "theme" ? ["index.php"] : [])].sort().join("\n") + "\n",
   );
   await writeFile(path.join(fixture, "README.md"), "Fixture package.\n");
+  await writeFile(path.join(assets, "repeated.txt"), "A".repeat(100000));
   await writeFile(
     path.join(source, "Runtime.php"),
     "<?php\n// committed runtime\n",
@@ -186,6 +189,7 @@ async function assertRenderedCommitArchive(renderedRoot, values) {
   const archiveName = `${values.PACKAGE_SLUG}-${releaseVersion}.zip`;
   const cleanArchive = path.join(cleanOutput, archiveName);
   const cleanBytes = await readFile(cleanArchive);
+  assert.match(execFileSync("unzip", ["-lv", cleanArchive], { encoding: "utf8" }), /100000\s+Stored\s+100000\s+0%[^\n]*assets\/repeated\.txt/, "Highly compressible runtime member must be stored.");
   if (values.PACKAGE_TYPE === "plugin") {
     await assertHostileArchiveMatrix({
       label: "rendered release",

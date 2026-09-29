@@ -107,7 +107,7 @@ archive="$output_dir/$slug-$expected_version.zip"
 rm -f "$archive"
 (
 	cd "$temporary/stage"
-	find "$slug" -print | LC_ALL=C sort | zip -Xq "$archive" -@
+	find "$slug" -print | LC_ALL=C sort | zip -0 -Xq "$archive" -@
 )
 
 bash "$project_root/scripts/verify-release.sh" "$archive" "$expected_version" "$commit"
