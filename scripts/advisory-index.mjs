@@ -8,7 +8,6 @@ export function validateAdvisoryIndex(bytes) {
   assert(index.schema === "ran-release-starter-advisories" && index.schema_version === 1, "Unknown advisory index schema.");
   assert(Array.isArray(index.advisories) && index.advisories.length <= 64, "Advisory entry budget exceeded.");
   const ids = new Set();
-  const affected = new Map();
   const version = (v) => stableVersion(v) && v.length <= 63;
   const commit = (v) => typeof v === "string" && /^[0-9a-f]{40}$/.test(v);
   for (const advisory of index.advisories) {
@@ -27,11 +26,6 @@ export function validateAdvisoryIndex(bytes) {
     const valid = pack ? version : commit;
     assert(Array.isArray(values) && values.length > 0 && values.every(valid) && new Set(values).size === values.length, "Invalid or duplicate affected identity.");
     assert(Array.isArray(unused) && unused.length === 0 && unusedFixed === null && valid(fixed) && !values.includes(fixed), "Invalid fixed identity or component mismatch.");
-    for (const value of values) {
-      const key = `${advisory.repository}:${value}`;
-      assert(!affected.has(key) || affected.get(key) === fixed, "Contradictory affected identity.");
-      affected.set(key, fixed);
-    }
   }
   return index;
 }

@@ -17,7 +17,13 @@ test("canonical empty maintenance index and both exact identity types", async ()
   assert.equal(parsed.advisories[0].fixed.pack_version, "1.2.4");
   assert.equal(parsed.advisories[1].fixed.shared_profile_b_commit, "b".repeat(40));
 });
-test("malformed, ambiguous, contradictory or over-budget indexes fail closed", () => {
+test("independent advisories can overlap the same revision with separate fixes", () => {
+  const secondPack = { ...structuredClone(pack), ghsa_id: "GHSA-4444-5555-6666", fixed: { pack_version: "1.2.5", shared_profile_b_commit: null } };
+  const secondWorkflow = { ...structuredClone(workflow), ghsa_id: "GHSA-5555-6666-7777", fixed: { pack_version: null, shared_profile_b_commit: "c".repeat(40) } };
+  const parsed = validateAdvisoryIndex(encode(index([pack, secondPack, workflow, secondWorkflow])));
+  assert.deepEqual(parsed.advisories.map(({ fixed }) => fixed), [pack.fixed, secondPack.fixed, workflow.fixed, secondWorkflow.fixed]);
+});
+test("malformed, duplicate or over-budget indexes fail closed", () => {
   const mutations = [
     x => { x.extra = true; }, x => { x.schema_version = 2; },
     x => { x.advisories.push(structuredClone(pack)); },
@@ -28,7 +34,6 @@ test("malformed, ambiguous, contradictory or over-budget indexes fail closed", (
     x => { x.advisories[0].affected.shared_profile_b_commits = ["a".repeat(40)]; },
     x => { x.advisories[0].fixed.pack_version = "1.2.3"; },
     x => { x.advisories[0].fixed.shared_profile_b_commit = "a".repeat(40); },
-    x => { x.advisories.push({ ...structuredClone(pack), ghsa_id: workflow.ghsa_id, fixed: { pack_version: "2.0.0", shared_profile_b_commit: null } }); },
     x => { x.advisories = Array(65).fill(pack); },
   ];
   for (const mutate of mutations) { const x = index([structuredClone(pack)]); mutate(x); assert.throws(() => validateAdvisoryIndex(encode(x))); }
