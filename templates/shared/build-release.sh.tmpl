@@ -81,14 +81,15 @@ manifest_oid=$(regular_blob_oid .release-please-manifest.json)
 [[ -n "${projected[$header_file]+x}" ]] \
 	|| fail 'WordPress header is absent from the committed allowlist.'
 header_version=$(git -C "$project_root" cat-file blob "$header_oid" \
-	| sed -nE 's/^[[:space:]]*(\*)?[[:space:]]*Version:[[:space:]]*([^[:space:]]+).*/\2/p')
-version_source=$(git -C "$project_root" cat-file blob "$version_oid" | tr -d '[:space:]')
+	| sed -nE 's/^[[:space:]]*(\*)?[[:space:]]*Version:[[:space:]]*([^[:space:]]+)[[:blank:]]*$/\2/p')
 manifest_version=$(git -C "$project_root" cat-file blob "$manifest_oid" \
 	| jq -er 'select(type == "object" and keys == ["."]) | .["."] | select(type == "string")' )
 [[ "$header_version" == "$expected_version" ]] \
 	|| fail 'WordPress header version does not match the expected version.'
-[[ "$version_source" == "$expected_version" && "$manifest_version" == "$expected_version" ]] \
+[[ "$manifest_version" == "$expected_version" ]] \
 	|| fail 'Release Please version sources do not agree.'
+git -C "$project_root" cat-file blob "$version_oid" | cmp -s - <(printf '%s\n' "$expected_version") \
+	|| fail 'version.txt does not contain the exact expected version and one LF.'
 
 while IFS=$'\t' read -r file object; do
 	destination="$stage_root/$file"

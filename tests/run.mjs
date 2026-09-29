@@ -281,6 +281,9 @@ async function assertRenderedCommitArchive(renderedRoot, values) {
     ["wrong-php", header.replace("Requires PHP: 8.0", "Requires PHP: 9.0"), /Requires PHP/],
     ["wrong-wp", header.replace("Requires at least: 6.0", "Requires at least: invalid"), /Requires at least/],
     ["wrong-version", header.replace(releaseVersion, "1.2.4"), /version/],
+    ["version-trailing-text", header.replace(`Version: ${releaseVersion}`, `Version: ${releaseVersion} unexpected`), /version/i],
+    ["php-trailing-text", header.replace("Requires PHP: 8.0", "Requires PHP: 8.0 unexpected"), /Requires PHP/],
+    ["wp-trailing-text", header.replace("Requires at least: 6.0", "Requires at least: 6.0 unexpected"), /Requires at least/],
   ]) {
     git(fixture, "restore", ".");
     await writeFile(path.join(fixture, values.HEADER_PATH), changedHeader);
@@ -288,6 +291,28 @@ async function assertRenderedCommitArchive(renderedRoot, values) {
     git(fixture, "commit", "-m", `test: ${label} rejection`);
     const result = spawnSync("bash", [build, git(fixture, "rev-parse", "HEAD"), releaseVersion, path.join(fixture, label)], { cwd: fixture, encoding: "utf8" });
     assert.notEqual(result.status, 0); assert.match(result.stderr, error);
+    const stagedRoot = path.join(fixture, `${label}-stage`);
+    const candidate = path.join(fixture, `${label}-candidate.zip`);
+    await mkdir(path.join(stagedRoot, values.PACKAGE_SLUG), { recursive: true });
+    await writeFile(path.join(stagedRoot, values.PACKAGE_SLUG, values.HEADER_PATH), changedHeader);
+    await cp(cleanArchive, candidate);
+    execFileSync("zip", ["-0", "-X", "-q", candidate, `${values.PACKAGE_SLUG}/${values.HEADER_PATH}`], { cwd: stagedRoot });
+    const verification = spawnSync("bash", [verify, candidate, releaseVersion, git(fixture, "rev-parse", "HEAD")], { cwd: fixture, encoding: "utf8" });
+    assert.notEqual(verification.status, 0); assert.match(verification.stderr, error);
+    await rm(stagedRoot, { recursive: true });
+    await rm(candidate);
+    git(fixture, "reset", "--hard", commit);
+  }
+  for (const [label, content] of [
+    ["version-internal-space", "1 .2.3\n"],
+    ["version-extra-line", "1.2.3\n\n"],
+  ]) {
+    git(fixture, "restore", ".");
+    await writeFile(path.join(fixture, "version.txt"), content);
+    git(fixture, "add", "version.txt");
+    git(fixture, "commit", "-m", `test: ${label} rejection`);
+    const result = spawnSync("bash", [build, git(fixture, "rev-parse", "HEAD"), releaseVersion, path.join(fixture, label)], { cwd: fixture, encoding: "utf8" });
+    assert.notEqual(result.status, 0); assert.match(result.stderr, /version\.txt/);
     git(fixture, "reset", "--hard", commit);
   }
   git(fixture, "restore", ".");
@@ -318,6 +343,28 @@ async function assertRenderedCommitArchive(renderedRoot, values) {
   );
 
   if (values.PACKAGE_TYPE === "theme") {
+    git(fixture, "restore", ".");
+    await rm(path.join(fixture, "index.php"));
+    await mkdir(path.join(fixture, "templates"), { recursive: true });
+    await writeFile(path.join(fixture, "templates/index.html"), "<!-- wp:post-content /-->\n");
+    await writeFile(path.join(fixture, "theme.json"), "{}\n");
+    await writeFile(path.join(fixture, "release-contents.txt"), ["README.md", "assets/repeated.txt", "src/Runtime.php", "style.css", "templates/index.html", "theme.json"].sort().join("\n") + "\n");
+    git(fixture, "add", "-A");
+    git(fixture, "commit", "-m", "test: block theme runtime layout");
+    const blockCommit = git(fixture, "rev-parse", "HEAD");
+    const blockOutput = path.join(fixture, "block-output");
+    execFileSync("bash", [build, blockCommit, releaseVersion, blockOutput], { cwd: fixture, stdio: "pipe" });
+    const blockArchive = path.join(blockOutput, archiveName);
+    execFileSync("bash", [verify, blockArchive, releaseVersion, blockCommit], { cwd: fixture, stdio: "pipe" });
+    const blockMembers = execFileSync("unzip", ["-Z1", blockArchive], { encoding: "utf8" });
+    assert.match(blockMembers, /templates\/index\.html/);
+    assert.doesNotMatch(blockMembers, /\/index\.php/);
+    await assertRejectedCommittedProjection(fixture, build, releaseVersion, {
+      label: "incomplete block theme index",
+      allowlist: ["README.md", "src/Runtime.php", "style.css", "theme.json"].join("\n") + "\n",
+      error: /theme requires/,
+    });
+    git(fixture, "reset", "--hard", changedCommit);
     await assertRejectedCommittedProjection(fixture, build, releaseVersion, {
       label: "missing theme index",
       allowlist: ["README.md", "src/Runtime.php", "style.css"].join("\n") + "\n",
