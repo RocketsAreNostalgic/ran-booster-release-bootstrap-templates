@@ -38,7 +38,7 @@ test("thin publisher promotes without privileged checkout, build or repack", asy
 test("declared toolchain and reviewed immutable actions remain exact", async () => {
   const pkg = JSON.parse(await read("package.json"));
   assert.equal(pkg.packageManager, "pnpm@11.13.1");
-  assert.equal(pkg.volta.node, "24.11.0");
+  assert.equal(pkg.volta.node, "24.21.0");
   assert.match(quality, /quality-node.yml@72a90b5826db37d1e94cdcdcf3374ccf58c0aa7d/);
   for (const workflow of [quality, release, await read("templates/shared/quality.yml.tmpl")]) {
     for (const action of workflow.matchAll(/^\s+(?:- )?uses: (\S+)/gm)) assert.match(action[1], /^[^@]+@[0-9a-f]{40}$/);

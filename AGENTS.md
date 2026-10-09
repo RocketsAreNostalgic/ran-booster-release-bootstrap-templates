@@ -23,7 +23,7 @@ Release Deployments. It is an independent product, not a WordPress plugin.
 
 ## Required checks
 
-Use the repository-declared Node 24.11.0 / pnpm 11.13.1 development toolchain
+Use the repository-declared Node 24.21.0 / pnpm 11.13.1 development toolchain
 and run `pnpm check`. It validates the source contract and real-Git
 exact-source archive decisions, renders plugin and theme fixtures, checks JSON and
 shell syntax, builds the pack twice, compares the bytes, and verifies the

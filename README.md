@@ -47,7 +47,7 @@ automatic repair, fallback format or bridge release.
 
 ## Build and checks
 
-Use Node **24.11.0** and pnpm **11.13.1**. No executable npm dependencies are needed.
+Use Node **24.21.0** and pnpm **11.13.1**. No executable npm dependencies are needed.
 The checks also require Git, Bash, jq, zip/unzip, SHA-256 utilities and PHP with zlib
 for rendered adapter verification. Generated repositories use their reviewed PHP
 runtime on `ubuntu-24.04`; they do not install Node or a package manager. The
