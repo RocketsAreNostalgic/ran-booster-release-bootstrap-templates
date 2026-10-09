@@ -16,6 +16,7 @@
     "build": "bash scripts/build-pack.sh",
     "verify": "bash scripts/verify-pack.sh",
     "test": "node tests/run.mjs && node --test tests/*.test.mjs",
-    "check": "pnpm test"
+    "check": "pnpm analyze && pnpm test",
+    "analyze": "node scripts/analyze-inspector.mjs"
   }
 }

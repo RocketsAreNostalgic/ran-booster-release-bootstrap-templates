@@ -63,6 +63,39 @@ node scripts/pack-evidence.mjs dist/ran-booster-release-bootstrap-templates.zip 
 ```
 
 Use the version from the selected commit, not the illustrative version above.
+
+`pnpm check` first runs `pnpm analyze`: PHPStan **2.2.8**, Level **8**, with
+PHP **7.4** analysis semantics and `treatPhpDocTypesAsCertain: false`. It extracts
+the exact shipped `RAN_ARCHIVE_INSPECTOR` heredoc bytes into a temporary file and
+proves the locked checker rejects a nullable-access negative control. The
+producer needs PHP **8.2 or newer** to run this development tool; generated
+inspectors retain their PHP 7.4–8.5 runtime contract.
+
+The external PHAR is downloaded from the official PHPStan release on each run,
+verified against SHA-256
+`ab9ea72523fe453b9f4dd19f12b1e403a91efa894cd25d9b0cb3ef62b7d20bf2`
+before execution, and removed with temporary analysis files on exit. A network
+or checksum failure fails the check. For offline runs, set `RAN_PHPSTAN_PHAR` to
+an already downloaded PHAR; the same digest check applies. This adds no Composer
+project, npm executable dependency, shipped analyzer or consumer requirement.
+The unchanged shared Node Quality workflow runs the same `pnpm check` command.
+
+A finite literal-scope check rejects missing or duplicate inspector delimiters,
+additional PHP openings, literal executable `php` commands and PHP-named files throughout
+the template tree. The existing exact consumer `php -l` syntax-only command is
+allowed because it does not execute input. New executable template PHP needs an
+explicit coverage change. Ordinary maintained PHP files are discovered recursively without honoring `.gitignore`, by PHP filename or
+opening PHP tag (including BOM/shebang, short echo and mixed HTML), and
+analyzed independently; the stream-wrapper test fixture is included. Only the
+root `.git`, `node_modules`, `dist`, `build` and
+`.ran-booster-template-pack-dist` working directories are omitted. Unsupported
+bare short PHP openings fail discovery. Embedded PHP strings in Node `.mjs`
+files and Markdown `.md` examples are data; leading PHP in those files still
+enters analysis. The one shipped template is extracted separately. This
+is not a shell interpreter and does not detect arbitrary dynamic command
+construction; exact generated-output review remains required. It makes no
+claim to analyze PHP fixture data in the producer's JavaScript tests.
+
 The full suite renders both profiles, builds real Git fixtures, compares dirty
 versus clean inputs and different umasks, tests committed projection and metadata
 failures, and rejects hostile archives before extraction. It independently builds

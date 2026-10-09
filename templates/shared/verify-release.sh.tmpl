@@ -59,14 +59,25 @@ RAN_ARCHIVE_PATH="$archive" php -d memory_limit=512M > "$actual" <<'RAN_ARCHIVE_
 <?php
 // Same bounded central/local ZIP checks as the original inspector, using the
 // PHP runtime already selected by Quality. Never load or execute payload PHP.
-function invalid($code) { throw new RuntimeException($code); }
-function u16($b, $o) { if ($o + 2 > strlen($b)) invalid('directory_bounds'); return unpack('v', substr($b, $o, 2))[1]; }
-function u32($b, $o) { if ($o + 4 > strlen($b)) invalid('directory_bounds'); return unpack('V', substr($b, $o, 4))[1]; }
-function nameOf($name) {
+/** @return never */
+function invalid(string $code): void { throw new RuntimeException($code); }
+function u16(string $b, int $o): int {
+    if ($o < 0 || $o + 2 > strlen($b)) invalid('directory_bounds');
+    $decoded = unpack('v', substr($b, $o, 2));
+    if ($decoded === false || !is_int($decoded[1] ?? null)) invalid('directory_bounds');
+    return $decoded[1];
+}
+function u32(string $b, int $o): int {
+    if ($o < 0 || $o + 4 > strlen($b)) invalid('directory_bounds');
+    $decoded = unpack('V', substr($b, $o, 4));
+    if ($decoded === false || !is_int($decoded[1] ?? null)) invalid('directory_bounds');
+    return $decoded[1];
+}
+function nameOf(string $name): string {
     if (!preg_match('//u', $name)) invalid('name_encoding');
     return $name;
 }
-function validateName($name) {
+function validateName(string $name): void {
     if (strlen($name) > 4096 || !preg_match('~^[A-Za-z0-9._/-]+$~D', $name) || $name[0] === '/') invalid('member_path');
     $path = substr($name, -1) === '/' ? substr($name, 0, -1) : $name;
     foreach (explode('/', $path) as $part) {
@@ -75,9 +86,11 @@ function validateName($name) {
 }
 try {
     $archive = getenv('RAN_ARCHIVE_PATH');
+    if ($archive === false || $archive === '') invalid('archive_path');
     $size = filesize($archive);
-    if (!$size || $size > 50 * 1024 * 1024) invalid('archive_size');
+    if ($size === false || $size <= 0 || $size > 50 * 1024 * 1024) invalid('archive_size');
     $bytes = file_get_contents($archive);
+    if ($bytes === false) invalid('archive_read');
     $eocd = -1;
     for ($i = strlen($bytes) - 22; $i >= max(0, strlen($bytes) - 65557); $i--) {
         if (u32($bytes, $i) === 0x06054b50) { $eocd = $i; break; }
@@ -120,7 +133,7 @@ try {
         $parts = explode('/', $name);
         for ($i = 1; $i < count($parts); $i++) if (($names[implode('/', array_slice($parts, 0, $i))] ?? null) === 'file') invalid('member_hierarchy');
     }
-    usort($entries, function ($a, $b) { return $a['local'] <=> $b['local']; });
+    usort($entries, function (array $a, array $b): int { return $a['local'] <=> $b['local']; });
     $expected = 0;
     foreach ($entries as $entry) {
         $offset = $entry['local'];
@@ -138,7 +151,7 @@ try {
     if ($expected !== $central) invalid('local_layout');
     foreach ($entries as $entry) echo ($entry['directory'] ? 'D' : 'F') . "\t" . $entry['name'] . "\n";
 } catch (Throwable $error) {
-    fwrite(STDERR, 'verify-release archive: ' . $error->getMessage() . "\n"); exit(1);
+    file_put_contents('php://stderr', 'verify-release archive: ' . $error->getMessage() . "\n"); exit(1);
 }
 
 RAN_ARCHIVE_INSPECTOR

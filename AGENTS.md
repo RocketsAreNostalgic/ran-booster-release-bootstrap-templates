@@ -30,6 +30,11 @@ shell syntax, builds the pack twice, compares the bytes, and verifies the
 archive and member digests. Full checks are mandatory on every pull request,
 including Release Please pull requests.
 
+`pnpm check` also analyzes the shipped PHP archive inspector and maintained PHP
+fixtures at Level 8 with PHP 7.4 semantics. The Node-owned runner verifies an
+external, checksum-pinned PHPStan PHAR; it adds no package dependency or tool to
+generated consumer workflows. See README for the offline tool-path option.
+
 Release Please owns `CHANGELOG.md`; keep `/CHANGELOG.md` in `.prettierignore`.
 Use Conventional Commits. Do not manually edit release tags or generated
 changelog content.
