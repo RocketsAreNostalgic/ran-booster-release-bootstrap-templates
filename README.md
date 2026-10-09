@@ -68,7 +68,7 @@ Use the version from the selected commit, not the illustrative version above.
 PHP **7.4** analysis semantics and `treatPhpDocTypesAsCertain: false`. It extracts
 the exact shipped `RAN_ARCHIVE_INSPECTOR` heredoc bytes into a temporary file and
 proves the locked checker rejects a nullable-access negative control. The
-producer needs PHP **8.2 or newer** to run this development tool; generated
+producer runs this development tool with PHP, separately from Node; generated
 inspectors retain their PHP 7.4–8.5 runtime contract.
 
 The external PHAR is downloaded from the official PHPStan release on each run,
