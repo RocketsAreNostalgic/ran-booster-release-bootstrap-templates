@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/RocketsAreNostalgic/ran-booster-release-bootstrap-templates/compare/v0.3.0...v0.3.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* qualify archive inspector failures across supported PHP ([#27](https://github.com/RocketsAreNostalgic/ran-booster-release-bootstrap-templates/issues/27)) ([beeef23](https://github.com/RocketsAreNostalgic/ran-booster-release-bootstrap-templates/commit/beeef233dc8291902c54240653851744831f34e2))
+
 ## [0.3.0](https://github.com/RocketsAreNostalgic/ran-booster-release-bootstrap-templates/compare/v0.2.1...v0.3.0) (2026-09-29)
 
 
